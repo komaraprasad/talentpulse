@@ -18,6 +18,8 @@ services:
         value: 3.12.10
       - key: PYTHONUTF8
         value: "1"
+      - key: TZ                       # timestamps in India time, as on the testers' computers (the dashboard reads them as local time)
+        value: Asia/Kolkata
       - key: TALENTPULSE_HOSTED       # turns off dry runs, the raw payload log and /docs
         value: "1"
       - key: TALENTPULSE_SMTP_CHECK   # cloud hosts block port 25; emails are found but not mail-server checked
