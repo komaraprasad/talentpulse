@@ -1,0 +1,29 @@
+# Secrets: LinkedIn session cookies and API keys. Never commit or upload these.
+.env
+.env.*
+!.env.example
+.mcp.json
+
+# Candidate data (personal information): local only, never part of a deployment
+sales_nav_leads.db
+*.db-wal
+*.db-shm
+*.db-journal
+sales_nav_leads.csv
+sales_nav_leads.xlsx
+talentpulse_*.csv
+talentpulse_*.xlsx
+search_progress.json
+ingest_debug.jsonl
+ingest_debug.jsonl.*
+
+# Backups and old copies
+backup_*/
+*.bak
+
+# Python and tooling
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/

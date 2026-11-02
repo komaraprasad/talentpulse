@@ -1,0 +1,27 @@
+# Render Blueprint for the TalentPulse testing server (Render Free plan).
+# No LinkedIn cookies are set here: searches run in each tester's own browser through the extension.
+#
+# STORAGE IS NOT PERSISTENT ON THE FREE PLAN. The SQLite database (sales_nav_leads.db) and every file the
+# app writes (exports, search progress, code cache) live in the service's own folder on Render's
+# temporary filesystem. They are wiped whenever the service restarts, spins down after 15 minutes
+# without traffic, or is redeployed. Export anything you want to keep to Excel/CSV.
+services:
+  - type: web
+    name: talentpulse
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/status
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.10
+      - key: PYTHONUTF8
+        value: "1"
+      - key: TALENTPULSE_HOSTED       # turns off dry runs, the raw payload log and /docs
+        value: "1"
+      - key: TALENTPULSE_SMTP_CHECK   # cloud hosts block port 25; emails are found but not mail-server checked
+        value: "0"
+    # No TALENTPULSE_DATA_DIR: data is written next to app.py (/opt/render/project/src), which is
+    # writable but temporary. For persistent data later: a paid plan with a disk, then set
+    # TALENTPULSE_DATA_DIR to the disk's mount path.

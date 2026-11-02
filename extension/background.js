@@ -1,0 +1,79 @@
+// Talks to the TalentPulse server (content scripts on https pages can't call it directly).
+// The server address is set on the extension's options page; it defaults to the local dashboard.
+const DEFAULT_API = 'http://127.0.0.1:8000';
+const LOCAL_ORIGINS = ['http://127.0.0.1:8000', 'http://localhost:8000'];  // covered by the manifest
+let searchTabId = null;
+
+const getApi = async () => {
+  const { serverUrl } = await chrome.storage.sync.get({ serverUrl: DEFAULT_API });
+  return (serverUrl || DEFAULT_API).replace(/\/+$/, '');
+};
+
+// Which search each Sales Navigator window belongs to, so its results reach the tester who launched it.
+// Kept in session storage because the service worker can be stopped between messages.
+const tabJobs = async () => (await chrome.storage.session.get({ tabJobs: {} })).tabJobs;
+const jobFor = async (tabId) => (await tabJobs())[tabId] || '';
+const setJob = async (tabId, jobId) => {
+  const all = await tabJobs();
+  all[tabId] = jobId;
+  await chrome.storage.session.set({ tabJobs: all });
+};
+
+// The dashboard page needs dashboard_bridge.js. The manifest covers the local addresses; a hosted
+// address is registered here once the user has allowed it on the options page.
+async function syncBridge() {
+  try { await chrome.scripting.unregisterContentScripts({ ids: ['tp-bridge'] }); } catch (e) {}
+  let origin;
+  try { origin = new URL(await getApi()).origin; } catch (e) { return; }
+  if (LOCAL_ORIGINS.includes(origin)) return;
+  if (!(await chrome.permissions.contains({ origins: [origin + '/*'] }))) return;
+  await chrome.scripting.registerContentScripts([
+    { id: 'tp-bridge', matches: [origin + '/*'], js: ['dashboard_bridge.js'], runAt: 'document_start' }]);
+}
+chrome.runtime.onInstalled.addListener(syncBridge);
+chrome.runtime.onStartup.addListener(syncBridge);
+chrome.storage.onChanged.addListener((changes) => { if (changes.serverUrl) syncBridge(); });
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const all = await tabJobs();
+  if (tabId in all) { delete all[tabId]; await chrome.storage.session.set({ tabJobs: all }); }
+});
+
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  if (msg.type === 'open') {
+    // A small unfocused window beside the dashboard: you stay on TalentPulse, and because the window is
+    // visible Sales Navigator draws every result card (a hidden background tab draws only a few)
+    // (a window hidden behind others is treated as hidden too, so it stays on top, in the bottom-right corner)
+    const open = () => chrome.windows.getCurrent((cur) => {
+      const W = 460, H = 560;
+      const left = Math.max(0, (cur.left || 0) + (cur.width || 1400) - W - 20);
+      const top = Math.max(0, (cur.top || 0) + (cur.height || 900) - H - 20);
+      chrome.windows.create({ url: msg.url, type: 'popup', focused: true, width: W, height: H, left, top },
+        (w) => { searchTabId = w.tabs[0].id; setJob(searchTabId, msg.jobId || ''); });
+    });
+    // Close the previous search window, if any, then open a fresh one
+    if (searchTabId !== null) chrome.tabs.remove(searchTabId, () => void chrome.runtime.lastError);
+    open();
+    return false;
+  }
+  if (msg.type === 'done') {
+    // The search tab closes itself once the run has finished
+    if (sender.tab && sender.tab.id === searchTabId) { chrome.tabs.remove(searchTabId); searchTabId = null; }
+    return false;
+  }
+  (async () => {
+    const api = await getApi();
+    try {
+      const jobId = sender.tab ? await jobFor(sender.tab.id) : '';
+      const post = (path, body) => fetch(api + path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, job_id: jobId || undefined }) });
+      const r = msg.type === 'refine' ? await post('/api/search/refine', { regions: msg.regions, titles: msg.titles || [] })
+        : msg.type === 'ingest' ? await post('/api/ingest', { page_url: msg.pageUrl, data: msg.data })
+        : await fetch(`${api}/api/ingest/state${jobId ? '?job_id=' + encodeURIComponent(jobId) : ''}`);
+      if (!r.ok) return reply({ offline: true, server: api, error: `server answered HTTP ${r.status}` });
+      reply(await r.json());
+    } catch (e) {
+      reply({ offline: true, server: api, error: String(e && e.message || e) });
+    }
+  })();
+  return true;  // async reply
+});

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TalentPulse Capture settings</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 16px; min-width: 380px; color: #1d2116; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #c9cfbd; border-radius: 8px; font: inherit; }
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  button { padding: 7px 14px; border: 0; border-radius: 8px; background: #5b8a00; color: #fff; font-weight: 600; cursor: pointer; }
+  button.secondary { background: transparent; color: #1d2116; border: 1px solid #c9cfbd; }
+  .hint { color: #6b715f; font-size: 12.5px; margin-top: 6px; }
+  #msg { margin-top: 12px; min-height: 1.5em; }
+  .ok { color: #3f6b00; } .err { color: #b3261e; }
+</style>
+</head>
+<body>
+  <label for="server">TalentPulse server address</label>
+  <input id="server" placeholder="http://127.0.0.1:8000" spellcheck="false">
+  <div class="hint">Your local dashboard is <code>http://127.0.0.1:8000</code>. For the hosted one, paste its <code>https://…</code> address.</div>
+  <div class="row">
+    <button id="save">Save and test</button>
+    <button id="local" class="secondary">Use local</button>
+  </div>
+  <div id="msg"></div>
+  <script src="options.js"></script>
+</body>
+</html>
