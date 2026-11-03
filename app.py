@@ -23,7 +23,7 @@ from dataclasses import asdict
 from typing import Optional, Dict, Any, List
 
 from fastapi import FastAPI, BackgroundTasks, Query
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 
@@ -1825,6 +1825,18 @@ a:hover { text-decoration: underline; }
 .top-actions { display: flex; align-items: center; gap: 8px; }
 .content { padding: 28px 32px 48px; max-width: 1480px; width: 100%; }
 .btn.menu-btn { display: none; }
+.ext-banner { border-color: color-mix(in srgb, var(--lime) 45%, transparent); background: var(--lime-soft); margin-bottom: 20px; }
+.ext-banner-main { display: flex; align-items: center; gap: 14px; padding: 16px 18px; flex-wrap: wrap; }
+.ext-banner-main > div:nth-child(2) { flex: 1; min-width: 220px; }
+.ext-banner-icon { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: var(--surface); color: var(--lime); flex: none; }
+.ext-banner-icon svg { width: 20px; height: 20px; }
+.ext-banner-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ext-banner a.btn { text-decoration: none; }
+.ext-banner-close { border: 0; background: transparent; color: var(--text-2); cursor: pointer; font-size: 18px; line-height: 1; padding: 4px 6px; border-radius: 6px; }
+.ext-banner-close:hover { background: var(--hover); }
+.ext-steps { margin: 0; padding: 0 18px 16px 70px; display: grid; gap: 6px; font-size: 13.5px; }
+.ext-steps code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px; background: var(--surface); border: 1px solid var(--line); padding: 1px 5px; border-radius: 5px; }
+@media (max-width: 720px) { .ext-steps { padding-left: 36px; } }
 .card, .job-body, .split > *, .form-grid > * { min-width: 0; }
 
 /* ---------- Primitives ---------- */
@@ -2248,6 +2260,25 @@ tr.is-new { animation: rowIn .7s cubic-bezier(.2,.8,.2,1), rowGlow 2.4s ease-out
     </header>
 
     <main class="content">
+      <!-- Shown only when the TalentPulse extension is missing or older than this server's copy -->
+      <div class="card ext-banner hidden" id="extBanner" role="status">
+        <div class="ext-banner-main">
+          <span class="ext-banner-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 3h4v3a2 2 0 1 0 4 0V3h3v7h-3a2 2 0 1 0 0 4h3v7h-7v-3a2 2 0 1 0-4 0v3H3v-7h3a2 2 0 1 0 0-4H3V3h7z"/></svg></span>
+          <div><b id="extBannerTitle">Add the TalentPulse extension to your browser</b>
+            <div class="cell-muted" id="extBannerText">Searches run through your own Sales Navigator login, using a small browser extension. Install it once to start searching.</div></div>
+          <div class="ext-banner-actions">
+            <a class="btn btn-primary" id="extDownload" href="/api/extension.zip" download><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg><span id="extDownloadText">Download extension</span></a>
+            <button type="button" class="btn btn-ghost" id="extHowBtn" aria-expanded="false" aria-controls="extSteps">How to install</button>
+            <button type="button" class="ext-banner-close" id="extClose" aria-label="Hide for now">×</button>
+          </div>
+        </div>
+        <ol class="ext-steps hidden" id="extSteps">
+          <li id="extStep1">Extract the downloaded ZIP into a folder you will keep, for example <code>Documents\TalentPulse-Extension</code>.</li>
+          <li>Open <code>edge://extensions</code> (Chrome: <code>chrome://extensions</code>) and turn on <b>Developer mode</b>.</li>
+          <li id="extStep3">Click <b>Load unpacked</b> and select the extracted folder (the one that contains <code>manifest.json</code>).</li>
+          <li>Make sure you are logged in to Sales Navigator in this browser, then refresh this page.</li>
+        </ol>
+      </div>
       <!-- ============ OVERVIEW ============ -->
       <section class="view stack" id="view-overview">
         <div class="kpis">
@@ -3025,6 +3056,46 @@ $('roleMenu').addEventListener('mousedown', (e) => {
 });
 document.addEventListener('click', (e) => { if (!e.target.closest('#roleBox, #roleMenu')) closeRoleMenu(); });
 
+// Extension banner: offers the download when the extension is missing, or older than this server's copy.
+// dashboard_bridge.js marks the page (and, from 2.11.0, its version) before this script runs.
+function versionParts(v) { return String(v || '0').split('.').map(n => parseInt(n, 10) || 0); }
+function olderVersion(a, b) {
+  const x = versionParts(a), y = versionParts(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); }
+  return false;
+}
+async function checkExtension() {
+  const root = document.documentElement.dataset;
+  let latest = '';
+  try { latest = (await (await fetch('/api/extension/info')).json()).version || ''; } catch (e) {}
+  const installed = !!root.talentpulseExt, have = root.talentpulseExtVersion || '';
+  const outdated = installed && latest && (!have || olderVersion(have, latest));
+  let hidden = false;
+  try { hidden = sessionStorage.getItem('tp.extBannerHidden') === (installed ? 'update-' + latest : 'install'); } catch (e) {}
+  if ((installed && !outdated) || hidden) { $('extBanner').classList.add('hidden'); return; }
+  if (outdated) {
+    $('extBannerTitle').textContent = `Update the TalentPulse extension to ${latest}`;
+    $('extBannerText').textContent = `You have ${have ? 'version ' + have : 'an older version'}. Download the new one so searches keep working as expected.`;
+    $('extDownloadText').textContent = 'Download update';
+    $('extStep1').innerHTML = 'Extract the downloaded ZIP <b>over your existing extension folder</b>, replacing its files.';
+    $('extStep3').innerHTML = 'Click <b>Reload</b> on TalentPulse Capture (or Load unpacked, if you used a new folder).';
+  }
+  $('extBanner').classList.remove('hidden');
+}
+$('extHowBtn').addEventListener('click', () => {
+  const open = $('extSteps').classList.toggle('hidden') === false;
+  $('extHowBtn').setAttribute('aria-expanded', String(open));
+});
+$('extDownload').addEventListener('click', () => {
+  $('extSteps').classList.remove('hidden'); $('extHowBtn').setAttribute('aria-expanded', 'true');
+});
+$('extClose').addEventListener('click', () => {
+  $('extBanner').classList.add('hidden');
+  const root = document.documentElement.dataset;
+  try { sessionStorage.setItem('tp.extBannerHidden', root.talentpulseExt ? 'update-' + ($('extBannerTitle').textContent.split(' ').pop()) : 'install'); } catch (e) {}
+});
+checkExtension();
+
 // Location: several places (OR'd), like Sales Navigator's location filter.
 // Picked places become chips; each keeps its LinkedIn geo ID when it has one.
 const MAX_PLACES = 10;
@@ -3308,6 +3379,39 @@ async function refreshAll(spinIcon) {
 </body>
 </html>
 """
+
+
+EXTENSION_DIR = os.path.join(BASE_DIR, "extension")
+
+
+def _extension_version() -> str:
+    try:
+        with open(os.path.join(EXTENSION_DIR, "manifest.json"), encoding="utf-8") as fh:
+            return str(json.load(fh).get("version") or "")
+    except Exception:
+        return ""
+
+
+@app.get("/api/extension/info")
+def extension_info():
+    """The extension version this server ships, so the dashboard can tell users to install or update it."""
+    return {"version": _extension_version()}
+
+
+@app.get("/api/extension.zip")
+def extension_zip():
+    """The TalentPulse browser extension as a ZIP (manifest.json at the top level, ready for Load unpacked)."""
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name in sorted(os.listdir(EXTENSION_DIR)):
+            path = os.path.join(EXTENSION_DIR, name)
+            if os.path.isfile(path):
+                zf.write(path, name)
+    filename = f"TalentPulse-Extension-{_extension_version() or 'latest'}.zip"
+    return Response(buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"})
 
 
 @app.get("/", response_class=HTMLResponse)
