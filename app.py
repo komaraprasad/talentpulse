@@ -1356,7 +1356,7 @@ def prepare_search(req: StartJobRequest):
     job_id = f"job-{int(time.time() * 1000) % 1000000}"
     place_text = "; ".join(p["text"] for p in places) or "Global"
     desc = f"{role}{' [' + ', '.join(req.seniority_levels) + ']' if req.seniority_levels else ''} in {place_text}"
-    limit = max(25, min(int(req.target_leads or 50), 500))
+    limit = max(25, min(int(req.target_leads or 50), 100))  # up to 100 leads per search
     with job_lock:
         _expire_idle_searches()
         mine = ext_jobs.get(req.replace_job_id or "")
@@ -1987,7 +1987,7 @@ tr.is-new { animation: rowIn .7s cubic-bezier(.2,.8,.2,1), rowGlow 2.4s ease-out
 .tab svg { width: 14px; height: 14px; }
 .tab.active { background: var(--elevated); color: var(--text); box-shadow: 0 1px 0 var(--line-strong) inset, 0 4px 14px rgba(0,0,0,.18); }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.seg { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .seg button, .pill-opt {
   height: 46px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--bg); cursor: pointer; font-family: 'Bricolage Grotesque'; font-weight: 600; font-size: 16px; transition: all .18s;
 }
@@ -2093,7 +2093,7 @@ tr.is-new { animation: rowIn .7s cubic-bezier(.2,.8,.2,1), rowGlow 2.4s ease-out
   .radar { width: 150px; height: 150px; }
   .job-stats { grid-template-columns: repeat(2, 1fr); }
   .grid-2 { grid-template-columns: 1fr; }
-  .seg { grid-template-columns: repeat(3, 1fr); }
+  .seg { grid-template-columns: repeat(2, 1fr); }
   .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .top-actions .btn-label { display: none; }
 }
@@ -2378,9 +2378,8 @@ tr.is-new { animation: rowIn .7s cubic-bezier(.2,.8,.2,1), rowGlow 2.4s ease-out
                 <div class="seg" id="leadSeg">
                   <button type="button" data-n="25">25</button>
                   <button type="button" data-n="50" class="active">50</button>
+                  <button type="button" data-n="75">75</button>
                   <button type="button" data-n="100">100</button>
-                  <button type="button" data-n="250">250</button>
-                  <button type="button" data-n="500">500</button>
                 </div>
               </div>
 
