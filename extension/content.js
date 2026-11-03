@@ -4,7 +4,9 @@
 // pace (5-8 s) until the dashboard has enough qualified people or the results run out. Then the tab closes.
 (() => {
   const ask = (msg) => new Promise((ok) => chrome.runtime.sendMessage(msg, ok));
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // The search runs in a hidden background tab, where the browser slows the page's own timers to as little
+  // as one per minute; the extension's background worker keeps time instead (it is not slowed)
+  const sleep = (ms) => ask({ type: 'sleep', ms }).then((ok) => ok || new Promise((r) => setTimeout(r, ms)));
   let auto = true, busy = false, lastKey = '';
 
   const box = document.createElement('div');
@@ -202,6 +204,11 @@
     }
   }
 
-  setInterval(tick, 1000);
-  tick();
+  // Checks once a second, on the background worker's clock (setInterval would be throttled in a hidden tab)
+  (async () => {
+    for (;;) {
+      try { await tick(); } catch (e) {}
+      await sleep(1000);
+    }
+  })();
 })();

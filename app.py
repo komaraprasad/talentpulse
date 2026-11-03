@@ -1322,7 +1322,7 @@ def _search_progress() -> Dict[str, int]:
 def _known_profiles() -> set:
     """People already in the database (from any earlier run), by member id."""
     try:
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(DB_PATH, timeout=30) as conn:
             return {_profile_key(r[0]) for r in conn.execute("SELECT linkedin_url FROM leads WHERE linkedin_url IS NOT NULL")}
     except Exception:
         return set()

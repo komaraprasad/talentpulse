@@ -19,6 +19,7 @@ import smtplib
 import socket
 import tempfile
 import uuid
+import threading
 import unicodedata
 import urllib.parse
 from contextlib import closing
@@ -1512,18 +1513,38 @@ class LeadDatabase:
     across cloud, VM (9p/NFS), and local environments.
     """
 
+    # Seconds a connection waits for another writer (searches, email updates and dashboard reads run
+    # at the same time) instead of failing straight away with "database is locked"
+    BUSY_TIMEOUT = 30
+    # Whether each database file's filesystem supports SQLite locking, tested once per file and process.
+    # Testing on every open made busy moments look like a broken filesystem, and the shadow copy that
+    # followed was written back over the real file, losing or corrupting rows.
+    _lock_support: Dict[str, bool] = {}
+    _lock_support_guard = threading.Lock()
+
     def __init__(self, db_path: str = "sales_nav_leads.db"):
         self.db_path = db_path
         self._use_shadow = False
 
-        try:
-            # Test whether filesystem supports direct POSIX file locking
-            conn = sqlite3.connect(db_path)
-            conn.execute("CREATE TABLE IF NOT EXISTS _fs_check (id int);")
-            conn.execute("DROP TABLE _fs_check;")
-            conn.close()
+        key = os.path.abspath(db_path)
+        with LeadDatabase._lock_support_guard:
+            if key not in LeadDatabase._lock_support:
+                try:
+                    # Test whether filesystem supports direct POSIX file locking
+                    conn = sqlite3.connect(db_path, timeout=self.BUSY_TIMEOUT)
+                    conn.execute("CREATE TABLE IF NOT EXISTS _fs_check (id int);")
+                    conn.execute("DROP TABLE _fs_check;")
+                    conn.close()
+                    LeadDatabase._lock_support[key] = True
+                except sqlite3.OperationalError as e:
+                    # Busy only means another process is writing: locking works
+                    LeadDatabase._lock_support[key] = "locked" in str(e).lower() or "busy" in str(e).lower()
+                    if not LeadDatabase._lock_support[key]:
+                        logger.warning("SQLite locking not supported for %s (%s); using a local shadow copy.", db_path, e)
+
+        if LeadDatabase._lock_support[key]:
             self.active_path = db_path
-        except sqlite3.OperationalError:
+        else:
             self._use_shadow = True
             sanitized_name = re.sub(r"[^\w\.-]", "_", os.path.basename(db_path))
             self.shadow_path = os.path.join(tempfile.gettempdir(), f"shadow_{sanitized_name}")
@@ -1537,7 +1558,7 @@ class LeadDatabase:
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.active_path)
+        return sqlite3.connect(self.active_path, timeout=self.BUSY_TIMEOUT)
 
     def sync_to_disk(self) -> None:
         if self._use_shadow and os.path.exists(self.active_path):

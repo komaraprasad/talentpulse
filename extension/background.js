@@ -63,6 +63,11 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     remember.then(open);
     return false;
   }
+  if (msg.type === 'sleep') {
+    // Waits for the hidden search tab, whose own timers the browser throttles
+    setTimeout(() => reply(true), Math.max(0, Math.min(Number(msg.ms) || 0, 10000)));
+    return true;
+  }
   if (msg.type === 'done') {
     // The search tab closes itself once the run has finished
     if (sender.tab && sender.tab.id === searchTabId) { chrome.tabs.remove(searchTabId); searchTabId = null; }

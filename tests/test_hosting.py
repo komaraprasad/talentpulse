@@ -187,3 +187,33 @@ def test_dry_run_never_touches_real_database(local):
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM leads").fetchone()[0] == before
     assert requests.get(base + "/docs").status_code == 200  # local mode keeps the API explorer
+
+
+def test_simultaneous_saves_are_never_lost():
+    """Searches, email updates and dashboard reads write at once on the host; every save must land."""
+    sys.path.insert(0, ROOT)
+    import sales_nav_extractor as s
+    db = os.path.join(tempfile.mkdtemp(prefix="tp_concurrency_"), "sales_nav_leads.db")
+    s.LeadDatabase(db)
+    errors = []
+
+    def guard(f):
+        try:
+            f()
+        except Exception as e:  # noqa: BLE001 - collected and asserted below
+            errors.append(repr(e))
+
+    def record(i):
+        return s.LeadRecord(full_name=f"P{i}", first_name="P", last_name=str(i), current_title="AI Engineer",
+                            company_name="Acme", location="Hyderabad", is_open_to_work=True, is_qualified=True,
+                            linkedin_url=f"https://www.linkedin.com/in/p{i}")
+    threads = ([threading.Thread(target=guard, args=(lambda i=i: s.LeadDatabase(db).upsert_lead(record(i)),)) for i in range(200)]
+               + [threading.Thread(target=guard, args=(lambda: [s.LeadDatabase(db).get_total_count() for _ in range(20)],)) for _ in range(5)]
+               + [threading.Thread(target=guard, args=(lambda i=i: s.LeadDatabase(db).update_lead_email(
+                   f"https://www.linkedin.com/in/p{i}", "a@b.com", "Unverified"),)) for i in range(10)])
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM leads").fetchone()[0] == 200
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert errors == []
