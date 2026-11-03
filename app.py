@@ -1020,7 +1020,7 @@ def get_batches():
 # Column widths (characters) for the Excel export, by header
 XLSX_WIDTHS = {"Candidate Name": 24, "LinkedIn Profile URL": 16, "Current Job Title": 34, "Headline": 60,
                "Current Company": 26, "Years of Experience": 11, "Location": 28, "Open-to-Work Status": 22,
-               "Mobile Number": 18, "Email Address": 32, "Email Status": 18, "Relevant Skills / Keywords": 36,
+               "Mobile Number": 18, "Email Address": 32, "Relevant Skills / Keywords": 36,
                "First Found (IST)": 21, "Last Seen (IST)": 21}
 
 
@@ -1510,7 +1510,7 @@ def _ingest_batch(elements: List[Dict[str, Any]], page_url: str, last_page: bool
             pending_search.setdefault("seen", set()).add(_profile_key(record.linkedin_url))
             current_job["total_processed"] += 1
         db.upsert_lead(record)
-        if FIND_EMAILS and not record.email and record.qualification_status in ("Qualified", "Needs Review"):
+        if FIND_EMAILS and not record.email:
             email_pool.submit(_find_email_later, record)
         quota_left -= 1
         with job_lock:
@@ -1539,7 +1539,7 @@ def _ingest_batch(elements: List[Dict[str, Any]], page_url: str, last_page: bool
             old = current_job.get("skipped_known", 0)
             note = (f"Only {current_job['total_processed']} new people left for these filters (you asked for {ctx['limit']})"
                     + (f"; {old} others were already collected in earlier runs" if old else "")
-                    + ". For more, widen a filter: location, seniority or role.")
+                    + ". For more, add related roles or more locations, or remove keywords.")
             current_job["error_message"] = note
             add_activity_log("warning", note)
     broadcast_event("job_status", current_job)
@@ -2404,15 +2404,6 @@ tr.is-new { animation: rowIn .7s cubic-bezier(.2,.8,.2,1), rowGlow 2.4s ease-out
               <div class="summary-row"><span class="cell-muted">Leads</span><span id="sumLeads">50</span></div>
               <div class="summary-row"><span class="cell-muted">Est. time</span><span id="sumTime">~10s</span></div>
             </div>
-            <div class="label" style="margin-top:4px">Every lead is checked</div>
-            <div class="gates">
-              <div class="gate"><i>A</i><div><b>Current role.</b> Rejects people who held the title only in the past.</div></div>
-              <div class="gate"><i>B</i><div><b>Company check.</b> Rejects matches on company name, not job title.</div></div>
-              <div class="gate"><i>C</i><div><b>No recruiters.</b> Drops talent acquisition and hiring posts.</div></div>
-              <div class="gate"><i>D</i><div><b>Open to work.</b> #OpenToWork badge or job-seeking language.</div></div>
-              <div class="gate"><i>E</i><div><b>Seniority.</b> Matches the levels you pick.</div></div>
-              <div class="gate"><i>G</i><div><b>Location.</b> Keeps only people in the place you picked.</div></div>
-            </div>
           </aside>
         </form>
       </section>
@@ -2470,7 +2461,6 @@ tr.is-new { animation: rowIn .7s cubic-bezier(.2,.8,.2,1), rowGlow 2.4s ease-out
   </div>
   <div class="drawer-body">
     <div class="section"><h4 class="label">Open-to-work evidence</h4><div class="evidence" id="dwEvidence"></div></div>
-    <div class="section"><h4 class="label">Qualification</h4><div class="evidence" id="dwQual"></div></div>
     <div class="section"><h4 class="label">Professional</h4><dl class="kv" id="dwPro"></dl></div>
     <div class="section"><h4 class="label">Skills</h4><div class="skills" id="dwSkills"></div></div>
     <div class="section"><h4 class="label">Contact</h4><div id="dwContact"></div><div class="hint" style="margin-top:10px" id="dwContactNote"></div></div>
@@ -2534,28 +2524,6 @@ function initials(name) {
 }
 function fmt(n) { return Number(n || 0).toLocaleString(); }
 function isOtw(l) { return l && (l.otw_status === 'Yes' || l.is_open_to_work === true); }
-function qualKey(l) {
-  const s = (l && l.qualification_status) || (l && l.is_qualified ? 'Qualified' : 'Rejected');
-  return s === 'Qualified' ? 'qualified' : s === 'Needs Review' ? 'review' : 'rejected';
-}
-function qualChip(l) {
-  const k = qualKey(l);
-  const reason = esc(l.qualification_reason || (l.no_match_reasons || []).join('; '));
-  if (k === 'qualified') return `<span class="chip chip-lime" title="${reason}"><span class="dot"></span>Qualified</span>`;
-  if (k === 'review') return `<span class="chip chip-amber" title="${reason}"><span class="dot"></span>Needs review</span>`;
-  const first = (l.no_match_reasons && l.no_match_reasons[0]) || '';
-  return `<span class="chip chip-ember" title="${reason}"><span class="dot"></span>${esc(shortReason(first))}</span>`;
-}
-const REASON_LABELS = {
-  'wrong job title (past role only)': 'Past role only',
-  'wrong job title (not in current positions)': 'Title mismatch',
-  'company name match, not job title': 'Company-name match',
-  'recruiter or hiring manager profile': 'Recruiter',
-  'seniority / experience level mismatch': 'Seniority mismatch',
-  'years of experience out of range': 'Experience out of range',
-  'not open to work': 'Not open to work',
-};
-function shortReason(r) { return REASON_LABELS[r] || (r ? r.charAt(0).toUpperCase() + r.slice(1) : 'Rejected'); }
 function otwChip(l) {
   return isOtw(l)
     ? `<span class="chip chip-lime" title="${esc(l.signal_description)}"><span class="dot"></span>Yes</span>`
@@ -2692,7 +2660,7 @@ function renderJob(job) {
   $('jobIdText').textContent = job.job_id || '';
   $('jobDesc').textContent = job.search_description || 'No search running';
 
-  const processed = job.total_processed || 0, qualified = job.qualified || 0, maxPages = job.max_pages || 0;
+  const processed = job.total_processed || 0, maxPages = job.max_pages || 0;
   $('jobRequested').textContent = hasJob ? fmt(job.target_leads || 0) : '0';
   $('jobProcessed').textContent = fmt(processed);
   let pct = 0;
@@ -2839,7 +2807,7 @@ function initSSE() {
       if (lead && !state.sessionLeads.some(l => l.linkedin_url === lead.linkedin_url)) {
         state.sessionLeads.unshift(lead);
         renderFeed(lead.linkedin_url);
-        if (isOtw(lead) || lead.is_qualified) radarBlip();
+        if (isOtw(lead)) radarBlip();
       }
       if (typeof msg.data.db_total === 'number') countUp($('kpiTotal'), msg.data.db_total);
       scheduleStatus();
@@ -2869,7 +2837,7 @@ function renderSummary() {
   $('sumLoc').textContent = placeList().join('; ') || 'Global';
   $('sumKw').textContent = state.keywords.join($('kwMode').value === 'all' ? ' + ' : ' / ') || '—';
   $('sumLeads').textContent = String(n);
-  const secs = pages * 3 * 7;  // about 3 result pages per page of qualified people, ~7 s each
+  const secs = pages * 3 * 7;  // about 3 result pages per page of people, ~7 s each
   $('sumTime').textContent = secs < 60 ? `~${secs}s` : `~${Math.round(secs / 60)} min`;
 }
 
@@ -3248,26 +3216,18 @@ function closeDrawer() {
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
 function kv(pairs) { return pairs.filter(p => p[1]).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join(''); }
 function renderDrawer(l) {
-  const otw = isOtw(l), qk = qualKey(l);
+  const otw = isOtw(l);
   $('dwAvatar').className = 'avatar' + (otw ? ' otw' : '');
   $('dwAvatar').textContent = initials(l.full_name);
   $('dwName').textContent = l.full_name || '—';
   $('dwHeadline').textContent = [l.current_title, l.company_name].filter(x => x && x !== 'Not available').join(' · ');
-  $('dwChips').innerHTML = otwChip(l) + qualChip(l);
+  $('dwChips').innerHTML = otwChip(l);
 
   $('dwEvidence').className = 'evidence' + (otw ? ' is-lime' : '');
   $('dwEvidence').innerHTML = `
     <div style="display:flex;justify-content:space-between;gap:10px;align-items:center"><b style="font-family:'Bricolage Grotesque';font-size:16px">${otw ? 'Open to work' : 'No active signal'}</b><span class="chip ${otw ? 'chip-lime' : 'chip-muted'}">${esc(l.signal_type || 'None')}</span></div>
     <div class="cell-muted">${esc(l.signal_description || 'No job-seeking signals detected.')}</div>
     <div class="mono" style="font-size:11px;color:var(--muted)">SIGNAL DATE · ${esc(l.signal_date || 'Not available')}${safeUrl(l.signal_source_url) ? ` · <a href="${esc(l.signal_source_url)}" target="_blank" rel="noopener">source ↗</a>` : ''}</div>`;
-
-  const qcls = { qualified: 'is-lime', review: 'is-amber', rejected: 'is-ember' }[qk];
-  const reasons = (l.no_match_reasons || []).filter(Boolean);
-  $('dwQual').className = 'evidence ' + qcls;
-  $('dwQual').innerHTML = `
-    <div style="display:flex;justify-content:space-between;gap:10px;align-items:center"><b style="font-family:'Bricolage Grotesque';font-size:16px">${esc(l.qualification_status || '')}</b></div>
-    <div class="cell-muted">${esc(l.target_role_match || '')}</div>
-    ${reasons.length ? `<div class="skills">${reasons.map(r => `<span class="chip chip-ember">${esc(r)}</span>`).join('')}</div>` : `<div class="cell-muted">${esc(l.qualification_reason || '')}</div>`}`;
 
   const li = safeUrl(l.linkedin_url);
   $('dwLinkedIn').classList.toggle('hidden', !li);

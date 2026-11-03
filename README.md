@@ -144,7 +144,7 @@ Requires outbound port 25. Companies whose domain differs from their name (e.g. 
 | Years of Experience, Location | From job dates and LinkedIn location |
 | Open-to-Work Status | `No`, or how it's known: LinkedIn #OpenToWork badge / #OpenToWork stated in profile / job-seeking language / confirmed by recruiter |
 | Qualification Status, Qualification Reason | Qualified / Needs Review / Rejected, with a short reason ("All checks passed", "Matched company name, not job title") |
-| Mobile Number, Email Address, Email Status | Phone shown as `(+91) 98765 43210`; email with how it was confirmed |
+| Mobile Number, Email Address | Phone shown as `(+91) 98765 43210`; best email found |
 | Relevant Skills / Keywords | LinkedIn skills, or skills spotted in headline/bio (all job families) |
 | First Found (IST), Last Seen (IST) | When the candidate first appeared, and the latest search that found them |
 

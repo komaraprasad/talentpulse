@@ -166,7 +166,6 @@
       if (!fastTried) {
         msg('Collecting results…');
         if (await fastRun(s.start_at)) return;
-        ask({ type: 'show' });  // reading the cards needs the (normally minimized) window on screen
       }
       if (!cards().length) return msg('Waiting for results to load…');
       // One read per results page: the page is identified by its number, not by card text that is still loading

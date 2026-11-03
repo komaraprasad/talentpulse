@@ -42,11 +42,18 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.type === 'open') {
-    // Sales Navigator opens in a minimized window, so the user stays on TalentPulse and never sees it.
-    // The fast path only reuses the page's own results request, which works without the page on screen;
-    // if it can't, content.js asks for the window to be shown so the visible cards can be read ('show').
-    const open = () => chrome.windows.create({ url: msg.url, type: 'popup', state: 'minimized' },
-      (w) => { searchTabId = w.tabs[0].id; setJob(searchTabId, msg.jobId || ''); });
+    // Sales Navigator opens in a background tab of the dashboard's window, folded into a collapsed
+    // "TalentPulse" tab group: the user stays on the dashboard and no page or window appears.
+    // The fast path only reuses the page's own results request, which works without the page on screen.
+    const open = () => chrome.tabs.create({ url: msg.url, active: false, windowId: sender.tab ? sender.tab.windowId : undefined },
+      async (t) => {
+        searchTabId = t.id;
+        setJob(t.id, msg.jobId || '');
+        try {
+          const group = await chrome.tabs.group({ tabIds: t.id });
+          await chrome.tabGroups.update(group, { title: 'TalentPulse', color: 'green', collapsed: true });
+        } catch (e) {}  // without tab groups the tab still stays in the background
+      });
     // Results go back to the dashboard that launched the search (no need to set the address by hand)
     let from = '';
     try { from = new URL(sender.url || '').origin; } catch (e) {}
@@ -54,18 +61,6 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     // Close the previous search window, if any, then open a fresh one
     if (searchTabId !== null) chrome.tabs.remove(searchTabId, () => void chrome.runtime.lastError);
     remember.then(open);
-    return false;
-  }
-  if (msg.type === 'show') {
-    // Fallback only: a small window in the bottom-right corner, visible so Sales Navigator draws every card
-    if (!sender.tab) return false;
-    chrome.windows.getLastFocused((cur) => {
-      const W = 460, H = 560;
-      const left = Math.max(0, (cur.left || 0) + (cur.width || 1400) - W - 20);
-      const top = Math.max(0, (cur.top || 0) + (cur.height || 900) - H - 20);
-      chrome.windows.update(sender.tab.windowId, { state: 'normal' },
-        () => chrome.windows.update(sender.tab.windowId, { width: W, height: H, left, top, focused: true }));
-    });
     return false;
   }
   if (msg.type === 'done') {

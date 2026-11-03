@@ -84,7 +84,6 @@ CSV_HEADERS = [
     "Open-to-Work Status",
     "Mobile Number",
     "Email Address",
-    "Email Status",
     "Relevant Skills / Keywords",
     "First Found (IST)",
     "Last Seen (IST)",
@@ -2027,7 +2026,7 @@ class LeadDatabase:
             location,
             self._csv_otw(is_otw, sig_type, sig_desc),
             self._csv_phone(phone),
-            email, email_status,
+            email,
             (skills or "").replace(";", ",").replace(" ,", ","),
             self._csv_time(first_found), self._csv_time(last_seen),
         ]
@@ -2038,7 +2037,7 @@ class LeadDatabase:
         filters: Optional[Dict[str, Any]] = None,
     ) -> int:
         """
-        Exports candidate records in the 16 recruiter-focused columns of CSV_HEADERS.
+        Exports candidate records in the recruiter-focused columns of CSV_HEADERS.
         Preserves Unicode, international phone numbers, and full formula-injection sanitization.
         Supports optional filtering matching active dashboard query criteria.
         """

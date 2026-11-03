@@ -201,7 +201,6 @@ def test_upsert_and_deduplication():
                 "Open-to-Work Status",
                 "Mobile Number",
                 "Email Address",
-                "Email Status",
                 "Relevant Skills / Keywords",
                 "First Found (IST)",
                 "Last Seen (IST)",

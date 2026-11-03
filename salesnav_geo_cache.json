@@ -10,5 +10,21 @@
  "hyderabad, telangana, india": {
   "id": "105556991",
   "text": "Hyderabad, Telangana, India"
+ },
+ "chennai, tamil nadu, india": {
+  "id": "106888327",
+  "text": "Chennai, Tamil Nadu, India"
+ },
+ "title:web developer": {
+  "id": "100",
+  "text": "Web Developer"
+ },
+ "visakhapatnam, andhra pradesh, india": {
+  "id": "111421590",
+  "text": "Visakhapatnam, Andhra Pradesh, India"
+ },
+ "title:lead java developer": {
+  "id": "9633",
+  "text": "Lead Java Developer"
  }
 }
