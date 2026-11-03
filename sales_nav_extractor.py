@@ -1506,6 +1506,95 @@ class LeadQualifier:
 # ---------------------------------------------------------------------------
 # 4. Persistence & Deduplication (SQLite & CSV)
 # ---------------------------------------------------------------------------
+# With DATABASE_URL set (a Postgres address, e.g. a free Neon database), candidates are stored there
+# instead of the local SQLite file, so they survive restarts and redeploys on hosts whose disk is wiped.
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+_pg_pool = None
+_pg_pool_guard = threading.Lock()
+
+
+def _pg_sql(sql: str) -> str:
+    """SQLite-style SQL -> Postgres: ? placeholders become %s, a literal % becomes %%, and LIKE ignores
+    case as it does in SQLite. Text inside quotes is left alone."""
+    parts = re.split(r"('(?:[^']|'')*')", sql)
+    for i in range(0, len(parts), 2):
+        seg = parts[i].replace("%", "%%").replace("?", "%s")
+        parts[i] = re.sub(r"(?<![A-Za-z_])LIKE(?![A-Za-z_])", "ILIKE", seg, flags=re.IGNORECASE)
+    return "".join(parts)
+
+
+class _PgCursor:
+    """The parts of sqlite3.Cursor the app uses, over a Postgres cursor."""
+
+    def __init__(self, cur: Any):
+        self._cur = cur
+
+    def execute(self, sql: str, params: Any = ()) -> "_PgCursor":
+        self._cur.execute(_pg_sql(sql), tuple(params or ()))
+        return self
+
+    def fetchone(self) -> Any:
+        return self._cur.fetchone() if self._cur.description else None
+
+    def fetchall(self) -> List[Any]:
+        return self._cur.fetchall() if self._cur.description else []
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+    @property
+    def description(self) -> Any:
+        return self._cur.description
+
+    @property
+    def rowcount(self) -> int:
+        return self._cur.rowcount
+
+
+class _PgConnection:
+    """The parts of sqlite3.Connection the app uses, over a pooled Postgres connection (autocommit)."""
+
+    def __init__(self, pool: Any):
+        self._pool = pool
+        self._conn = pool.getconn()
+
+    def cursor(self) -> _PgCursor:
+        return _PgCursor(self._conn.cursor())
+
+    def execute(self, sql: str, params: Any = ()) -> _PgCursor:
+        return self.cursor().execute(sql, params)
+
+    def commit(self) -> None:
+        pass  # every statement commits on its own
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._pool.putconn(self._conn)
+            self._conn = None
+
+    def __enter__(self) -> "_PgConnection":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
+
+def _pg_connection() -> _PgConnection:
+    global _pg_pool
+    with _pg_pool_guard:
+        if _pg_pool is None:
+            import psycopg
+            from psycopg_pool import ConnectionPool
+            # Client-side parameter binding: works through Neon's connection pooler and keeps SQLite's
+            # loose typing (e.g. "? IS NULL"); check() replaces connections dropped while the database slept
+            _pg_pool = ConnectionPool(
+                DATABASE_URL, min_size=1, max_size=15, open=True, timeout=30,
+                check=ConnectionPool.check_connection,
+                kwargs={"autocommit": True, "cursor_factory": psycopg.ClientCursor, "connect_timeout": 15},
+            )
+    return _PgConnection(_pg_pool)
+
+
 class LeadDatabase:
     """
     Handles SQLite database persistence, upsert deduplication, and CSV export.
@@ -1522,9 +1611,20 @@ class LeadDatabase:
     _lock_support: Dict[str, bool] = {}
     _lock_support_guard = threading.Lock()
 
+    _pg_ready = False  # Postgres schema created/upgraded in this process
+
     def __init__(self, db_path: str = "sales_nav_leads.db"):
         self.db_path = db_path
         self._use_shadow = False
+        self.is_postgres = bool(DATABASE_URL)
+
+        if self.is_postgres:
+            self.active_path = None
+            with LeadDatabase._lock_support_guard:
+                if not LeadDatabase._pg_ready:
+                    self._init_db()
+                    LeadDatabase._pg_ready = True
+            return
 
         key = os.path.abspath(db_path)
         with LeadDatabase._lock_support_guard:
@@ -1557,7 +1657,9 @@ class LeadDatabase:
 
         self._init_db()
 
-    def _get_connection(self) -> sqlite3.Connection:
+    def _get_connection(self) -> Any:
+        if self.is_postgres:
+            return _pg_connection()
         return sqlite3.connect(self.active_path, timeout=self.BUSY_TIMEOUT)
 
     def sync_to_disk(self) -> None:
@@ -1574,9 +1676,10 @@ class LeadDatabase:
     def _init_db(self) -> None:
         with closing(self._get_connection()) as conn:
             cursor = conn.cursor()
-            # Enable WAL mode for high concurrency, zero crash risk, and fast writes
-            cursor.execute("PRAGMA journal_mode = WAL;")
-            cursor.execute("PRAGMA synchronous = NORMAL;")
+            if not self.is_postgres:
+                # Enable WAL mode for high concurrency, zero crash risk, and fast writes
+                cursor.execute("PRAGMA journal_mode = WAL;")
+                cursor.execute("PRAGMA synchronous = NORMAL;")
             
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS leads (
@@ -1628,8 +1731,12 @@ class LeadDatabase:
         Preserves all existing production data and ensures backwards compatibility.
         """
         cursor = conn.cursor()
-        cursor.execute("PRAGMA table_info(leads);")
-        existing_cols = {row[1]: row[2] for row in cursor.fetchall()}
+        if self.is_postgres:
+            cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'leads';")
+            existing_cols = {row[0]: None for row in cursor.fetchall()}
+        else:
+            cursor.execute("PRAGMA table_info(leads);")
+            existing_cols = {row[1]: row[2] for row in cursor.fetchall()}
 
         new_columns = [
             ("phone", "TEXT"),

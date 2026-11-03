@@ -16,6 +16,7 @@ import time
 import queue
 import logging
 import threading
+from contextlib import closing
 import tempfile
 import uuid
 from dataclasses import asdict
@@ -990,7 +991,7 @@ def get_batches():
     with db._get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT job_id, search_role, COUNT(*), MAX(discovered_at) "
+            "SELECT job_id, MAX(search_role), COUNT(*), MAX(discovered_at) "
             "FROM leads "
             "WHERE job_id IS NOT NULL AND job_id != '' "
             "GROUP BY job_id ORDER BY MAX(discovered_at) DESC;"
@@ -1322,8 +1323,8 @@ def _search_progress() -> Dict[str, int]:
 def _known_profiles() -> set:
     """People already in the database (from any earlier run), by member id."""
     try:
-        with sqlite3.connect(DB_PATH, timeout=30) as conn:
-            return {_profile_key(r[0]) for r in conn.execute("SELECT linkedin_url FROM leads WHERE linkedin_url IS NOT NULL")}
+        with closing(LeadDatabase(DB_PATH)._get_connection()) as conn:
+            return {_profile_key(r[0]) for r in conn.execute("SELECT linkedin_url FROM leads WHERE linkedin_url IS NOT NULL").fetchall()}
     except Exception:
         return set()
 
