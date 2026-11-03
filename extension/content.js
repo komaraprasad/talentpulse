@@ -163,7 +163,11 @@
         await ask({ type: 'ingest', pageUrl: location.href, data: { elements: [], paging: { start: 0, count: 0, total: 0 } } });
         return finished('Sales Navigator found no matches for this search.');
       }
-      if (!fastTried) { msg('Collecting results…'); if (await fastRun(s.start_at)) return; }
+      if (!fastTried) {
+        msg('Collecting results…');
+        if (await fastRun(s.start_at)) return;
+        ask({ type: 'show' });  // reading the cards needs the (normally minimized) window on screen
+      }
       if (!cards().length) return msg('Waiting for results to load…');
       // One read per results page: the page is identified by its number, not by card text that is still loading
       const pageNo = ((document.querySelector('.artdeco-pagination__indicator--number.active, [aria-current="true"]') || {}).innerText || '').trim();
