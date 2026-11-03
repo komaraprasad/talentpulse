@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TalentPulse Capture",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "description": "Sends the Sales Navigator results you are viewing to your TalentPulse dashboard (local or hosted). Makes no extra LinkedIn requests.",
   "permissions": [
     "storage",
@@ -9,7 +9,8 @@
   ],
   "host_permissions": [
     "http://127.0.0.1:8000/*",
-    "http://localhost:8000/*"
+    "http://localhost:8000/*",
+    "https://*.onrender.com/*"
   ],
   "optional_host_permissions": [
     "https://*/*"
@@ -34,7 +35,8 @@
     {
       "matches": [
         "http://127.0.0.1:8000/*",
-        "http://localhost:8000/*"
+        "http://localhost:8000/*",
+        "https://*.onrender.com/*"
       ],
       "js": [
         "dashboard_bridge.js"

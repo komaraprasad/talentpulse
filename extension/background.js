@@ -2,6 +2,8 @@
 // The server address is set on the extension's options page; it defaults to the local dashboard.
 const DEFAULT_API = 'http://127.0.0.1:8000';
 const LOCAL_ORIGINS = ['http://127.0.0.1:8000', 'http://localhost:8000'];  // covered by the manifest
+// Dashboards the manifest already reaches: a search launched from one of them reports back to it
+const knownDashboard = (origin) => LOCAL_ORIGINS.includes(origin) || /^https:\/\/[a-z0-9-]+\.onrender\.com$/.test(origin);
 let searchTabId = null;
 
 const getApi = async () => {
@@ -25,7 +27,7 @@ async function syncBridge() {
   try { await chrome.scripting.unregisterContentScripts({ ids: ['tp-bridge'] }); } catch (e) {}
   let origin;
   try { origin = new URL(await getApi()).origin; } catch (e) { return; }
-  if (LOCAL_ORIGINS.includes(origin)) return;
+  if (knownDashboard(origin)) return;
   if (!(await chrome.permissions.contains({ origins: [origin + '/*'] }))) return;
   await chrome.scripting.registerContentScripts([
     { id: 'tp-bridge', matches: [origin + '/*'], js: ['dashboard_bridge.js'], runAt: 'document_start' }]);
@@ -50,9 +52,13 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       chrome.windows.create({ url: msg.url, type: 'popup', focused: true, width: W, height: H, left, top },
         (w) => { searchTabId = w.tabs[0].id; setJob(searchTabId, msg.jobId || ''); });
     });
+    // Results go back to the dashboard that launched the search (no need to set the address by hand)
+    let from = '';
+    try { from = new URL(sender.url || '').origin; } catch (e) {}
+    const remember = knownDashboard(from) ? chrome.storage.sync.set({ serverUrl: from }) : Promise.resolve();
     // Close the previous search window, if any, then open a fresh one
     if (searchTabId !== null) chrome.tabs.remove(searchTabId, () => void chrome.runtime.lastError);
-    open();
+    remember.then(open);
     return false;
   }
   if (msg.type === 'done') {
