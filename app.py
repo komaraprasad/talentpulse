@@ -754,9 +754,10 @@ def get_leads(
             term = f"%{search.strip()}%"
             params.extend([term, term, term, term, term])
 
-        if location:
-            conditions.append("location LIKE ?")
-            params.append(f"%{location.strip()}%")
+        loc_sql, loc_params = location_condition(location)
+        if loc_sql:
+            conditions.append(loc_sql)
+            params.extend(loc_params)
 
         exp_sql, exp_params = experience_condition(experience)
         if exp_sql:
@@ -1452,7 +1453,7 @@ ingest_lock = threading.Lock()  # one batch at a time, so the lead limit can't b
 # Checking an email with the company's mail server takes ~4 s per person, so it runs alongside the
 # search, 10 people at a time, instead of holding up each result
 from concurrent.futures import ThreadPoolExecutor
-from sales_nav_extractor import EmailFinder, experience_condition, is_non_employer
+from sales_nav_extractor import EmailFinder, experience_condition, is_non_employer, location_condition
 email_pool = ThreadPoolExecutor(max_workers=10)
 FIND_EMAILS = os.environ.get("TALENTPULSE_FIND_EMAILS", "1") != "0"
 email_finder = EmailFinder()
@@ -2573,9 +2574,13 @@ tr.is-new { animation: rowIn .7s cubic-bezier(.2,.8,.2,1), rowGlow 2.4s ease-out
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
                 <input class="input" id="exSearch" placeholder="Search name, title, company, skills…">
               </div>
-              <div class="input-icon" style="flex:0 1 220px">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s-8-6.5-8-13a8 8 0 1 1 16 0c0 6.5-8 13-8 13z"/><circle cx="12" cy="9" r="3"/></svg>
-                <input class="input" id="exLocation" placeholder="Location">
+              <div class="geo-wrap ex-geo" style="flex:0 1 360px;min-width:220px">
+                <div class="input loc-box" id="exPlaceBox">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s-8-6.5-8-13a8 8 0 1 1 16 0c0 6.5-8 13-8 13z"/><circle cx="12" cy="9" r="3"/></svg>
+                  <span id="exPlaceChips" class="loc-chips"></span>
+                  <input id="exLocation" placeholder="Location" autocomplete="off" aria-label="Location">
+                </div>
+                <div class="geo-menu hidden" id="exGeoMenu"></div>
               </div>
               <button class="btn btn-ghost" onclick="clearFilters()">Clear</button>
               <button class="btn btn-primary" onclick="exportFiltered()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>Export filtered</button>
@@ -3302,7 +3307,8 @@ renderPlaces();
 // ---------------------------------------------------------------------------
 function explorerParams() {
   const p = new URLSearchParams();
-  const s = $('exSearch').value.trim(), loc = $('exLocation').value.trim();
+  const s = $('exSearch').value.trim();
+  const loc = [...(state.exPlaces || []).map(p => p.text), $('exLocation').value.trim()].filter(Boolean).join('; ');
   if (s) p.set('search', s);
   if (loc) p.set('location', loc);
   p.set('search_role', $('exRole').value);
@@ -3344,8 +3350,74 @@ async function loadBatches() {
 }
 ['exRole', 'exBatch', 'exOtw', 'exExp', 'exContact', 'exSort'].forEach(id => $(id).addEventListener('change', loadExplorer));
 ['exSearch', 'exLocation'].forEach(id => $(id).addEventListener('input', () => { clearTimeout(exTimer); exTimer = setTimeout(loadExplorer, 280); }));
+// Location filter: picked like New Search's Location (chips and suggestions); people in any place are shown.
+// The server also matches each place's other names (Bengaluru finds "Greater Bangalore Area").
+state.exPlaces = []; state.exGeoResults = []; state.exGeoFocus = -1;
+let exGeoTimer;
+function renderExPlaces() {
+  $('exPlaceChips').innerHTML = state.exPlaces.map((p, i) =>
+    `<span class="loc-chip"><span>${esc(p.text)}</span><button type="button" data-rm="${i}" aria-label="Remove ${esc(p.text)}">×</button></span>`).join('');
+  $('exLocation').placeholder = state.exPlaces.length ? 'Add place…' : 'Location';
+}
+function addExPlace(text) {
+  text = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!text) return;
+  if (!state.exPlaces.some(p => p.text.toLowerCase() === text.toLowerCase())) {
+    if (state.exPlaces.length >= 10) { toast('You can add up to 10 places.', 'warning'); return; }
+    state.exPlaces.push({ text });
+  }
+  $('exLocation').value = '';
+  $('exGeoMenu').classList.add('hidden');
+  renderExPlaces();
+  loadExplorer();
+}
+async function exGeoSearch(q) {
+  try {
+    const data = await (await fetch('/api/geo/search?q=' + encodeURIComponent(q))).json();
+    if ($('exLocation').value.trim() !== q) return;  // a newer keystroke won
+    state.exGeoResults = data.results || [];
+    state.exGeoFocus = state.exGeoResults.length ? 0 : -1;
+    const menu = $('exGeoMenu');
+    menu.innerHTML = !state.exGeoResults.length
+      ? '<div class="geo-item" style="cursor:default;color:var(--muted)">No matching place. Check the spelling or try the city or country name.</div>'
+      : state.exGeoResults.map((r, i) => {
+          const added = state.exPlaces.some(p => p.text.toLowerCase() === r.name.toLowerCase());
+          return `<div class="geo-item${i === state.exGeoFocus ? ' focus' : ''}" data-i="${i}"${added ? ' style="opacity:.55"' : ''}><div>${highlight(r.name, q)}<small class="ri-sub">${added ? 'Already added' : esc(r.type) + ' · ' + esc(r.country)}</small></div></div>`;
+        }).join('');
+    menu.classList.remove('hidden');
+  } catch (e) {}
+}
+$('exLocation').addEventListener('input', (e) => {
+  clearTimeout(exGeoTimer);
+  const q = e.target.value.trim();
+  if (q.length < 2) { $('exGeoMenu').classList.add('hidden'); return; }
+  exGeoTimer = setTimeout(() => exGeoSearch(q), 160);
+});
+$('exLocation').addEventListener('keydown', (e) => {
+  const menu = $('exGeoMenu'), open = !menu.classList.contains('hidden'), n = state.exGeoResults.length;
+  if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && open && n) {
+    e.preventDefault();
+    state.exGeoFocus = (state.exGeoFocus + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+    menu.querySelectorAll('.geo-item').forEach((el, i) => el.classList.toggle('focus', i === state.exGeoFocus));
+  } else if (e.key === 'Enter' && open && state.exGeoFocus >= 0) { e.preventDefault(); addExPlace(state.exGeoResults[state.exGeoFocus].name); }
+  else if (e.key === 'Enter' && e.target.value.trim()) { e.preventDefault(); addExPlace(e.target.value); }  // keep the words as typed
+  else if (e.key === 'Backspace' && !e.target.value && state.exPlaces.length) { state.exPlaces.pop(); renderExPlaces(); loadExplorer(); }
+  else if (e.key === 'Escape') menu.classList.add('hidden');
+});
+$('exGeoMenu').addEventListener('mousedown', (e) => {
+  const it = e.target.closest('.geo-item[data-i]'); if (!it) return;
+  e.preventDefault(); addExPlace(state.exGeoResults[Number(it.dataset.i)].name); $('exLocation').focus();
+});
+$('exPlaceBox').addEventListener('click', (e) => {
+  const rm = e.target.closest('[data-rm]');
+  if (rm) { state.exPlaces.splice(Number(rm.dataset.rm), 1); renderExPlaces(); loadExplorer(); }
+  $('exLocation').focus();
+});
+document.addEventListener('click', (e) => { if (!e.target.closest('.ex-geo')) $('exGeoMenu').classList.add('hidden'); });
+
 function clearFilters() {
   $('exSearch').value = ''; $('exLocation').value = '';
+  state.exPlaces = []; renderExPlaces(); $('exGeoMenu').classList.add('hidden');
   ['exRole', 'exBatch', 'exOtw', 'exExp', 'exContact'].forEach(id => $(id).value = 'all');
   $('exSort').value = 'date_desc';
   loadExplorer();

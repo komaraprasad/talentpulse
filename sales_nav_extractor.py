@@ -91,6 +91,25 @@ CSV_HEADERS = [
     "Last Seen (IST)",
 ]
 
+def location_condition(text: Optional[str]) -> Tuple[str, List[str]]:
+    """
+    Lead Explorer location filter as SQL: several places separated by ';', people in any of them match.
+    Each place matches its city name and its other names ("Bengaluru, Karnataka, India" also finds
+    "Greater Bangalore Area"), because LinkedIn writes the same place in many ways.
+    """
+    import locations
+    terms: List[str] = []
+    for place in (text or "").split(";"):
+        place = place.strip()
+        for t in (locations._local_terms(place) if place else []) or ([place.lower()] if place else []):
+            if t not in terms:
+                terms.append(t)
+    terms = terms[:30]
+    if not terms:
+        return "", []
+    return "(" + " OR ".join("location LIKE ?" for _ in terms) + ")", [f"%{t}%" for t in terms]
+
+
 def experience_condition(exp):
     """Naukri-style experience range ("0-1", "1-3", "3-5", "5-10", "10+") as an SQL condition."""
     ranges = {"0-1": (0, 1), "1-3": (1, 3), "3-5": (3, 5), "5-10": (5, 10), "10+": (10, 99)}
@@ -2273,9 +2292,10 @@ class LeadDatabase:
                 conditions.append("(full_name LIKE ? OR company_name LIKE ? OR current_title LIKE ? OR location LIKE ? OR skills LIKE ?)")
                 params.extend([term, term, term, term, term])
 
-            if filters.get("location"):
-                conditions.append("location LIKE ?")
-                params.append(f"%{filters['location']}%")
+            loc_sql, loc_params = location_condition(filters.get("location"))
+            if loc_sql:
+                conditions.append(loc_sql)
+                params.extend(loc_params)
 
             exp_sql, exp_params = experience_condition(filters.get("experience"))
             if exp_sql:

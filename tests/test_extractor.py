@@ -1220,3 +1220,24 @@ def test_email_status_column_in_recruiter_words():
     assert status("a@acme.com", "Unverified") == "Guess"
     assert status("a@zoho.com", "Risky (shared name)") == "Guess"
     assert status("", "Not found") == ""
+
+
+def test_explorer_location_filter_matches_other_names_and_several_places():
+    from sales_nav_extractor import location_condition
+    sql, params = location_condition("Bengaluru, Karnataka, India")
+    assert sql == "(location LIKE ? OR location LIKE ?)" and set(params) == {"%bangalore%", "%bengaluru%"}
+    sql, params = location_condition("Bengaluru, Karnataka, India; Hyderabad, Telangana, India")
+    assert set(params) == {"%bangalore%", "%bengaluru%", "%hyderabad%", "%secunderabad%"}
+    assert set(location_condition("chennai")[1]) == {"%chennai%", "%madras%"}  # typed text works too
+    assert location_condition("") == ("", []) and location_condition(None) == ("", []) and location_condition(" ; ") == ("", [])
+    # Matches the ways LinkedIn writes the place, and only the places asked for
+    with tempfile.TemporaryDirectory() as d:
+        db_path = os.path.join(d, "t.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE leads (location TEXT)")
+        conn.executemany("INSERT INTO leads VALUES (?)", [("Greater Bengaluru Area",), ("Bangalore Urban, Karnataka, India",),
+                         ("Secunderabad, Telangana",), ("Chennai, Tamil Nadu, India",), ("Pune, Maharashtra, India",)])
+        sql, params = location_condition("Bengaluru, Karnataka, India; Hyderabad, Telangana, India")
+        rows = [r[0] for r in conn.execute(f"SELECT location FROM leads WHERE {sql}", params)]
+        conn.close()
+    assert sorted(rows) == ["Bangalore Urban, Karnataka, India", "Greater Bengaluru Area", "Secunderabad, Telangana"]
