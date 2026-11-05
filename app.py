@@ -84,8 +84,9 @@ class RequestLimits:
             if size > self.MAX_BODY_BYTES:
                 await JSONResponse({"error": "Request too large."}, status_code=413)(scope, receive, send)
                 return
-            # Behind the host's proxy the caller's address is the first X-Forwarded-For entry
-            fwd = headers.get(b"x-forwarded-for", b"").decode("latin-1").split(",")[0].strip()
+            # Behind the AWS load balancer the caller's address is the last X-Forwarded-For entry (the one the
+            # load balancer adds); earlier entries come from the browser and can be made up
+            fwd = headers.get(b"x-forwarded-for", b"").decode("latin-1").split(",")[-1].strip()
             ip = fwd or (scope.get("client") or ("?",))[0]
             now = time.time()
             with self.lock:
@@ -1021,7 +1022,7 @@ def get_batches():
 # Column widths (characters) for the Excel export, by header
 XLSX_WIDTHS = {"Candidate Name": 24, "LinkedIn Profile URL": 16, "Current Job Title": 34, "Headline": 60,
                "Current Company": 26, "Years of Experience": 11, "Location": 28, "Open-to-Work Status": 22,
-               "Mobile Number": 18, "Email Address": 32, "Relevant Skills / Keywords": 36,
+               "Mobile Number": 18, "Email Address": 32, "Email Status": 19, "Relevant Skills / Keywords": 36,
                "First Found (IST)": 21, "Last Seen (IST)": 21}
 
 
@@ -1451,15 +1452,103 @@ ingest_lock = threading.Lock()  # one batch at a time, so the lead limit can't b
 # Checking an email with the company's mail server takes ~4 s per person, so it runs alongside the
 # search, 10 people at a time, instead of holding up each result
 from concurrent.futures import ThreadPoolExecutor
-from sales_nav_extractor import EmailFinder, experience_condition
+from sales_nav_extractor import EmailFinder, experience_condition, is_non_employer
 email_pool = ThreadPoolExecutor(max_workers=10)
 FIND_EMAILS = os.environ.get("TALENTPULSE_FIND_EMAILS", "1") != "0"
 email_finder = EmailFinder()
 
 
-def _find_email_later(record: Any) -> None:
+# Company websites: after a search, the extension looks each new employer up once in Sales Navigator (in the
+# user's own session), so emails use the real domain (Tata Consultancy Services -> tcs.com) instead of a guess
+# from the name. Until a website is known, or when none is listed, the name-based guess is used as before.
+COMPANY_LOOKUPS_PER_PAGE = 10
+_company_sites: Dict[str, str] = {}  # company id -> website ("" = looked up, none listed)
+_company_waiting: Dict[str, List[Any]] = {}  # company id -> people emailed before its website came in
+_company_asked: Dict[str, float] = {}  # company id -> when the extension was asked to look it up
+_company_lock = threading.Lock()
+_company_table_ready: set = set()  # databases where the table exists (once per database per process)
+
+
+def _company_id(el: Dict[str, Any]) -> str:
+    """Sales Navigator's id for the person's current employer (urn:li:fs_salesCompany:1283 -> "1283")."""
+    for p in (el.get("currentPositions") or [])[:1]:
+        if isinstance(p, dict):
+            company = p.get("company") if isinstance(p.get("company"), dict) else {}
+            cid = str(p.get("companyUrn") or company.get("entityUrn") or "").rsplit(":", 1)[-1]
+            return cid if cid.isdigit() else ""
+    return ""
+
+
+def _company_conn():
+    db = LeadDatabase(DB_PATH)
+    conn = db._get_connection()
+    key = "postgres" if db.is_postgres else DB_PATH
+    if key not in _company_table_ready:
+        conn.execute("CREATE TABLE IF NOT EXISTS company_sites (company_id TEXT PRIMARY KEY, name TEXT, "
+                     "website TEXT, checked_at TEXT)")
+        conn.commit()
+        _company_table_ready.add(key)
+    return conn
+
+
+def _company_website(company_id: str) -> Optional[str]:
+    """The employer's website: None = not looked up yet, "" = looked up and none listed."""
+    if not company_id:
+        return ""
+    with _company_lock:
+        if company_id in _company_sites:
+            return _company_sites[company_id]
     try:
-        found, status = email_finder.find(record.first_name, record.last_name, record.company_name, None)
+        with closing(_company_conn()) as conn:
+            row = conn.execute("SELECT website FROM company_sites WHERE company_id = ?", (company_id,)).fetchone()
+    except Exception as e:
+        logging.warning(f"Company website lookup failed for {company_id}: {e}")
+        return None
+    if row is None:
+        return None
+    with _company_lock:
+        _company_sites[company_id] = row[0] or ""
+    return row[0] or ""
+
+
+def _companies_to_look_up(elements: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """New employers on this results page for the extension to look up (each company once)."""
+    out: List[Dict[str, str]] = []
+    now = time.time()
+    for el in elements:
+        cid = _company_id(el) if isinstance(el, dict) else ""
+        if not cid or any(c["id"] == cid for c in out):
+            continue
+        pos = (el.get("currentPositions") or [{}])[0]
+        if is_non_employer(pos.get("companyName", "") if isinstance(pos, dict) else ""):
+            continue  # 'Self', 'Student'...: LinkedIn links these to unrelated companies
+        with _company_lock:
+            if now - _company_asked.get(cid, 0) < 600:
+                continue
+        if _company_website(cid) is not None:
+            continue
+        with _company_lock:
+            _company_asked[cid] = now
+        out.append({"id": cid})
+        if len(out) >= COMPANY_LOOKUPS_PER_PAGE:
+            break
+    return out
+
+
+def _wait_for_company(company_id: str, record: Any) -> None:
+    with _company_lock:
+        _company_waiting.setdefault(company_id, []).append(record)
+        del _company_waiting[company_id][:-100]
+        while len(_company_waiting) > 500:  # companies never looked up are forgotten, oldest first
+            _company_waiting.pop(next(iter(_company_waiting)))
+
+
+def _find_email_later(record: Any, company_id: str = "") -> None:
+    try:
+        website = _company_website(company_id) if company_id else None
+        found, status = email_finder.find(record.first_name, record.last_name, record.company_name, website or None)
+        if not website and company_id and _company_website(company_id):
+            return  # the company's website came in meanwhile; the lookup that uses it saves the email
         db = LeadDatabase(DB_PATH)
         db.update_lead_email(record.linkedin_url, found, status)
         broadcast_event("lead_email", {"linkedin_url": record.linkedin_url, "email": found, "email_status": status})
@@ -1512,7 +1601,10 @@ def _ingest_batch(elements: List[Dict[str, Any]], page_url: str, last_page: bool
             current_job["total_processed"] += 1
         db.upsert_lead(record)
         if FIND_EMAILS and not record.email:
-            email_pool.submit(_find_email_later, record)
+            cid = _company_id(el)
+            if cid and _company_website(cid) is None:
+                _wait_for_company(cid, record)  # guessed now, looked up again once the website comes in
+            email_pool.submit(_find_email_later, record, cid)
         quota_left -= 1
         with job_lock:
             current_job["qualified"] += 1 if record.is_qualified else 0
@@ -1629,7 +1721,40 @@ def ingest(req: IngestRequest, background_tasks: BackgroundTasks):
         return {"accepted": 0, "ignored": True, "waiting": True, **state}
     last_page = not elements or bool(paging.get("total") is not None and paging.get("start", 0) + paging.get("count", 25) >= paging["total"])
     background_tasks.add_task(_ingest_worker, elements, (req.page_url or "")[:2000], last_page, state["job_id"])
-    return {"accepted": len(elements), "waiting": True, **state}
+    companies = _companies_to_look_up(elements) if FIND_EMAILS else []
+    return {"accepted": len(elements), "waiting": True, **state, "companies": companies}
+
+
+class CompanySitesRequest(BaseModel):
+    companies: List[Dict[str, Any]] = []
+
+
+@app.post("/api/companies")
+def save_company_sites(req: CompanySitesRequest):
+    """Employer websites the extension read from Sales Navigator; emails already guessed are looked up again."""
+    saved = 0
+    for c in (req.companies or [])[:50]:
+        cid = str(c.get("id") or "")
+        website = str(c.get("website") or "").strip()[:200]
+        if not cid.isdigit() or any(ch.isspace() for ch in website) or (website and "." not in website):
+            continue
+        try:
+            with closing(_company_conn()) as conn:
+                conn.execute("INSERT INTO company_sites (company_id, name, website, checked_at) VALUES (?, ?, ?, ?) "
+                             "ON CONFLICT (company_id) DO UPDATE SET website = excluded.website, checked_at = excluded.checked_at",
+                             (cid, str(c.get("name") or "")[:200], website, time.strftime("%Y-%m-%d %H:%M:%S")))
+                conn.commit()
+        except Exception as e:
+            logging.warning(f"Could not save the website of company {cid}: {e}")
+            continue
+        saved += 1
+        with _company_lock:
+            _company_sites[cid] = website
+            waiting = _company_waiting.pop(cid, [])
+        if website and FIND_EMAILS:
+            for record in waiting:
+                email_pool.submit(_find_email_later, record, cid)
+    return {"saved": saved}
 
 
 GEO_CACHE_FILE = os.path.join(DATA_DIR, "salesnav_geo_cache.json")

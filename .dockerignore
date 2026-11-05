@@ -1,0 +1,19 @@
+# Only the files the Dockerfile copies are needed; keep secrets, data and backups out of the image
+.env
+.env.*
+.mcp.json
+.git
+__pycache__
+*.pyc
+.pytest_cache
+*.db-shm
+*.db-wal
+sales_nav_leads.db
+sales_nav_leads.csv
+ingest_debug*.jsonl
+search_progress.json
+salesnav_geo_cache.json
+*.bak
+backup_*
+tests
+deploy

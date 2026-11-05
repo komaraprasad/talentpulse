@@ -27,3 +27,6 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+
+# Location IDs learned at run time (rebuilt automatically)
+salesnav_geo_cache.json

@@ -201,6 +201,7 @@ def test_upsert_and_deduplication():
                 "Open-to-Work Status",
                 "Mobile Number",
                 "Email Address",
+                "Email Status",
                 "Relevant Skills / Keywords",
                 "First Found (IST)",
                 "Last Seen (IST)",
@@ -1184,3 +1185,38 @@ def test_extension_mode_normalizes_salesnav_results_and_builds_link():
     assert url.startswith("https://www.linkedin.com/sales/search/people?query=(filters:List(")
     assert "type:REGION" in url and "id:102713980" in url and "type:SENIORITY_LEVEL" in url
     assert not A.SERVER_LINKEDIN_CALLS  # the server never calls LinkedIn by default
+
+
+def test_email_names_drop_headline_text_and_titles():
+    from sales_nav_extractor import EmailFinder
+    clean = EmailFinder.clean_name
+    assert clean("Murari", "Krishna-Java Full Stack Developer at Zensar") == ("Murari", "Krishna")
+    assert clean("Er", "Surya Bhan") == ("Surya", "Bhan")
+    assert clean("Dr. Asha", "Rao") == ("Asha", "Rao")
+    assert clean("Ravi", "Kumar | Java Developer") == ("Ravi", "Kumar")
+    assert clean("Priya", "Sharma (She/Her)") == ("Priya", "Sharma")
+    # Ordinary names are unchanged
+    assert clean("Tejesh", "Reddy KN") == ("Tejesh", "Reddy KN")
+    assert clean("Jean-Luc", "Picard") == ("Jean-Luc", "Picard")
+    assert clean("Anju", "Kumari") == ("Anju", "Kumari")
+
+
+def test_no_work_email_without_a_real_employer():
+    from sales_nav_extractor import EmailFinder, is_non_employer, EMAIL_STATUS_NOT_FOUND
+    for name in ("Self", "Self-Employed", "Student", "(freelancing)", "Freelance", "Open to Work", "", "N/A"):
+        assert is_non_employer(name), name
+    for name in ("IBM", "Infosys", "Self Drive Rentals", "☁️ Intellinet ☁️", "Student Loan Finance Ltd"):
+        assert not is_non_employer(name), name
+    assert EmailFinder().find("Akshaya", "Dhaipulle", "Self") == (None, EMAIL_STATUS_NOT_FOUND)
+
+
+def test_email_status_column_in_recruiter_words():
+    from sales_nav_extractor import LeadDatabase
+    status = LeadDatabase._csv_email_status
+    assert status("a@tcs.com", "Verified") == "Confirmed"
+    assert status("a@gmail.com", "From profile") == "From profile"
+    assert status("a@gmail.com", "") == "From profile"  # older rows: emails read from the profile had no status
+    assert status("a@ibm.com", "Risky (catch-all)") == "Likely (unconfirmed)"
+    assert status("a@acme.com", "Unverified") == "Guess"
+    assert status("a@zoho.com", "Risky (shared name)") == "Guess"
+    assert status("", "Not found") == ""

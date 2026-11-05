@@ -1,72 +1,74 @@
-# TalentPulse AI — Open-to-Work Sourcing Console
+# TalentPulse — Open-to-Work Sourcing Console
 
-An in-house, zero-subscription tool that finds **candidates who are open to work** on LinkedIn Sales Navigator, filters out false matches, finds their work email, and exports a recruiter-ready CSV.
+An in-house tool that finds **candidates who are open to work** on LinkedIn Sales Navigator and exports a
+recruiter-ready Excel/CSV file, with work emails where they can be found.
 
-You pick a **role**, a **location** and (optionally) a **seniority**; the tool searches Sales Navigator live through your logged-in session, checks every lead, and streams results to a web dashboard.
-
----
-
-## Project Structure
-
-```
-sales_nav_pipeline/
-├── app.py                   # Web dashboard (FastAPI + live updates via SSE) and its UI
-├── sales_nav_extractor.py   # Search, cleaning, qualification gates, email finder, database, CSV, CLI
-├── job_titles.py            # Standard job-title catalogue + typeahead for the Role box
-├── locations.py             # Location names -> LinkedIn geo IDs (aliases, parent-region fallback)
-├── world_geo.db             # Offline world locations for the location autocomplete
-├── sales_nav_leads.db       # Candidate database (created automatically)
-├── requirements.txt
-├── .env.example             # Template for the two LinkedIn session cookies
-└── tests/test_extractor.py  # Automated tests
-```
+You pick one or more **roles** and **locations**; the search runs in your own logged-in Sales Navigator through
+a small browser extension, and the candidates stream into the TalentPulse dashboard.
 
 ---
 
-## Setup
+## How it works
+
+```
+ Dashboard (this server)  ──postMessage──▶  TalentPulse extension  ──▶  Sales Navigator, in a hidden
+       ▲                                    (in each user's browser)    background tab of that browser
+       └──────── results (POST /api/ingest) ◀───────────┘
+```
+
+- The **server never contacts LinkedIn** and stores no LinkedIn logins. All LinkedIn access happens in the
+  user's own browser, under their own Sales Navigator seat.
+- The search opens in a background tab inside a collapsed "TalentPulse" tab group: the user stays on the
+  dashboard. The extension reads the result pages Sales Navigator itself loads (25 people per page) and sends
+  them to the server.
+- After a search, the extension looks up each **new employer's website** once (at most 30 per search, with
+  pauses), so emails use the real company domain.
+
+## Project structure
+
+```
+app.py                  Web server (FastAPI) and the dashboard page
+sales_nav_extractor.py  Cleaning, open-to-work check, email finder, database (SQLite or PostgreSQL), export
+job_titles.py           Job-title catalogue for the Role box
+locations.py            Place names -> LinkedIn location IDs (aliases, nearest-region fallback)
+world_geo.db            Offline world locations for the Location box
+extension/              The TalentPulse browser extension (Edge / Chrome, Manifest V3)
+tests/                  Automated tests
+Dockerfile              Container image for AWS
+deploy/aws/             ECS and EKS configuration and the AWS deployment guide
+.env.example            Optional server settings
+```
+
+---
+
+## Run it on your computer
 
 ```bash
 pip install -r requirements.txt
-```
-
-Create a `.env` file (copy `.env.example`) with the cookies from a browser logged into **Sales Navigator**
-(DevTools → Application → Cookies → `https://www.linkedin.com`):
-
-```env
-LI_AT=AQED...
-JSESSIONID="ajax:1234567890123456789"
-```
-
-Treat these like a password. Logging out of LinkedIn invalidates them; copy fresh ones if you see an HTTP 401.
-
-## Live searches: the TalentPulse browser extension
-The server **never contacts LinkedIn itself**. LinkedIn ends sessions whose cookies are reused outside the browser.
-Live results come from your own Sales Navigator tab through the extension in `extension/`, which only reads the
-results the page already loaded (no extra LinkedIn requests). The cookies in `.env` are not needed for this.
-
-Install once (Edge or Chrome): open `edge://extensions` → turn on **Developer mode** → **Load unpacked** → pick the
-`extension` folder.
-
-Each search:
-1. Start the dashboard (`python app.py`), fill **New Search**, click **Launch search**: Sales Navigator opens in a new tab
-   with your filters.
-2. In the **TalentPulse** panel on that page, click **Auto-page**. It clicks Next at a human pace (8–14 s) until the lead
-   limit or the last page. You can also page manually; each page you open is sent.
-3. Results appear live in the dashboard, checked by gates A–G, with emails and CSV export as before.
-
-## Run the dashboard
-
-```bash
 python app.py
 ```
 
-Open **http://localhost:8000**. The server only accepts connections from this computer.
+Open **http://127.0.0.1:8000**. Locally the data is kept in `sales_nav_leads.db` (SQLite) in this folder.
+
+Install the extension once: click **Download extension** in the dashboard's banner (or use the `extension`
+folder directly), open `edge://extensions` (Chrome: `chrome://extensions`), turn on **Developer mode**, click
+**Load unpacked** and choose the folder that contains `manifest.json`. Stay logged in to Sales Navigator in the
+same browser.
 
 ## Run the tests
 
 ```bash
 python -m pytest -q tests
 ```
+
+The PostgreSQL tests run when `TALENTPULSE_TEST_DATABASE_URL` points at a throwaway database
+(its tables are dropped); otherwise they are skipped.
+
+## Deploy on AWS
+
+See **[deploy/aws/README.md](deploy/aws/README.md)**: one container (port 8000, health check `/api/status`),
+PostgreSQL (RDS) through `DATABASE_URL`, an Application Load Balancer, and **exactly one replica**.
+Server settings are listed in [.env.example](.env.example).
 
 ---
 
@@ -75,102 +77,78 @@ python -m pytest -q tests
 ### New Search
 | Field | Notes |
 |---|---|
-| Role / job title | Required. Typeahead like LinkedIn's title filter: suggestions come from LinkedIn's own standard-title list when cookies are set (`/sales-api/salesApiFacetTypeahead`), otherwise from the built-in catalogue in `job_titles.py` (~380 standard titles across all job families, each with the variants people write). Partial words, any word order, short forms (`SDE`, `BDE`, `CA`) and typos work. One title per search (picking another replaces it), or keep your own words. A standard title also accepts its variants (Software Engineer → SDE, Software Developer). |
-| Location | Works like LinkedIn's location filter: add one or more places (up to 10, OR'd — people in any of them are found), each picked from suggestions (LinkedIn's own list when cookies are set, otherwise `world_geo.db`). Everyday names work (Bangalore, Gurgaon, Bombay, USA, UK, NCR). Every place is resolved to a LinkedIn geo ID; a place without one is searched within its nearest region that has one, then Gate G keeps only candidates in the place itself. |
-| Seniority | Optional, one level: Entry-level, Senior, Manager, Director or Executive. |
-| Skills | Optional words added to the search (e.g. `Python, Spring Boot`). |
-| How many leads | 25, 50, 100, 250 or 500. |
+| Role / job title | Required. Up to 5 roles; people with any of them are found. Suggestions from the built-in title catalogue; any title can be typed as written. |
+| Location | Up to 10 places; people in any of them are found. Everyday names work (Bangalore, Gurgaon, USA). A place without its own LinkedIn ID is searched within its region and then filtered to the place. |
+| Keywords | Optional, up to 10, "Match any" or "Match all". Searched in the profile, like Sales Navigator's keyword box. |
+| How many leads | 25, 50, 75 or 100 per search. |
 
-Every search is an open-to-work search. Runs pause 2.5–4.5 s between pages and 15 s every 10 pages to protect the account.
+Every search looks for open-to-work people: the keyword "Open to work" is always included.
 
 ### Overview
-Total candidates and open-to-work counts, the live job card (status, progress, processed / qualified / filtered, **Stop safely**, **Export run CSV**), the live feed for the current run, and recent runs.
-
-**Stop safely** finishes the page in progress, then stops before the next one.
+Totals, the running search (progress, **Stop safely**, **Export to Excel**), the live feed and recent searches.
+Several people can search at once (up to 5 searches); each sees its own running search.
 
 ### Lead Explorer
-Search, filter (role, batch, open to work, qualification, contact, sort, incl. by experience) and export (**filtered** or **all**). Each row has re-check, details and LinkedIn buttons; clicking a row opens the candidate drawer.
-
-### Candidate drawer
-Open-to-work evidence, qualification result and reasons, title/company/**experience**/location, skills, contact details with copy buttons and email status, and **Mark open to work / Mark not looking** overrides.
+Every saved candidate, with filters (role, batch, open to work, experience, contact, sort) and Excel export of the
+filtered list or everything. Clicking a row opens the candidate's details, with **Mark open to work** /
+**Mark not looking** overrides.
 
 ---
 
-## How each lead is checked
+## How "open to work" is decided
 
-| Gate | Rejects when |
-|---|---|
-| A — Current role | The role appears only in a past position |
-| B — Company check | The keyword matched the company name, not the title |
-| C — Recruiters | The profile is a recruiter / talent acquisition / hiring post |
-| D — Open to work | No #OpenToWork badge or job-seeking language (marked **Needs review**) |
-| E — Seniority | Title doesn't match the chosen seniority |
-| F — Experience | Calculated experience is outside a requested range (API/CLI only) |
-| G — Location | Only when the place had no LinkedIn ID of its own: the candidate's location doesn't mention it |
+1. Sales Navigator returns only people whose profile contains "Open to work" (the search keyword).
+2. Each person's headline and About text is then checked:
+   - `#OpenToWork` / "open to work" → **Yes - #OpenToWork stated in profile**
+   - "actively looking", "seeking new opportunities", "open to new roles", "available for hire"… →
+     **Yes - job-seeking language in profile**
+   - none of these → **No** (the phrase was somewhere the check can't see, e.g. an old job description)
 
-## Years of experience
-Calculated from position start/end dates in the LinkedIn data; overlapping jobs are counted once. Shown as `—` when dates are missing. If LinkedIn only returns the current job, the figure undercounts.
+Sales Navigator does not show LinkedIn's green #OpenToWork photo frame, and nobody outside LinkedIn Recruiter can
+see the private "recruiters only" setting; those people can't be found by any Sales Navigator tool.
 
 ## Contact details
-- **Phone** — only when the candidate wrote one in their headline or bio (labelled numbers, `+country` numbers, and bare 10-digit Indian mobiles). Sales Navigator does not expose phone numbers.
-- **Work email** — for Qualified / Needs-review leads without a profile email, the built-in finder:
-  1. resolves the company's email domain (must have a mail server),
-  2. builds common formats (`first.last@`, `flast@`, …),
-  3. asks the company mail server which address exists — **no email is sent**.
 
-| Email Status | Meaning |
+- **Phone**: only when the candidate wrote one in their headline or About text (about 1 in 100). LinkedIn
+  never shares phone numbers.
+- **Email**: from the profile text when written there; otherwise the finder
+  1. takes the employer's real website (looked up by the extension), or guesses the domain from the company name,
+  2. builds the common formats (`first.last@`, `flast@`, …) from the cleaned name,
+  3. where outgoing port 25 is open, asks the company's mail server which address exists (**no email is sent**).
+
+  No email is made for "Self", "Student", "Freelance", "Open to Work" and similar non-employers.
+
+| Email Status (export) | Meaning |
 |---|---|
-| Verified | Mail server confirmed the address |
-| From profile | Written by the candidate in their headline/bio |
-| Risky (catch-all) | Server accepts any address; most likely format shown |
-| Risky (shared name) | Two candidates with the same name at the same company got the same address; it may belong to the other person |
-| Unverified | Server couldn't be checked; best guess |
-| Not found | Nothing could be confirmed — no address is invented |
+| Confirmed | The company's mail server accepted this exact address |
+| From profile | The candidate wrote it in their profile |
+| Likely (unconfirmed) | Right company domain; the server accepts any address, so the exact name can't be proved |
+| Guess | The most common format, not checked |
 
-Requires outbound port 25. Companies whose domain differs from their name (e.g. Tata Consultancy Services → tcs.com) come back as Not found.
+## Excel / CSV export (14 columns)
 
----
+Candidate Name · LinkedIn Profile URL · Current Job Title · Headline · Current Company · Years of Experience ·
+Location · Open-to-Work Status · Mobile Number · Email Address · Email Status · Relevant Skills / Keywords ·
+First Found (IST) · Last Seen (IST)
+
+Records are de-duplicated by LinkedIn profile. Cells starting with `=`, `+`, `-`, `@`, tab or carriage return are
+prefixed with `'` so spreadsheets don't run them as formulas.
 
 ## Safety limits
-- **Daily quota:** 2,000 leads per rolling 24 hours (shown in the sidebar).
-- Stops immediately on HTTP 401 (expired session), 429 (rate limited) or 999 (LinkedIn checkpoint).
+
+- 2,000 candidates per rolling 24 hours (shown in the sidebar); at most 100 per search.
+- Short random pauses between result pages; company lookups only after the search, at most 30, and they stop at
+  once if LinkedIn asks to slow down.
 - Sales Navigator returns at most 2,500 results per search.
 
-## CSV export (16 columns)
-| Column | What it holds |
-|---|---|
-| Candidate Name, LinkedIn Profile URL | Who it is (URL is the de-duplication key) |
-| Current Job Title, Headline, Current Company | Their role; the headline often states notice period / "immediate joiner" |
-| Years of Experience, Location | From job dates and LinkedIn location |
-| Open-to-Work Status | `No`, or how it's known: LinkedIn #OpenToWork badge / #OpenToWork stated in profile / job-seeking language / confirmed by recruiter |
-| Qualification Status, Qualification Reason | Qualified / Needs Review / Rejected, with a short reason ("All checks passed", "Matched company name, not job title") |
-| Mobile Number, Email Address | Phone shown as `(+91) 98765 43210`; best email found |
-| Relevant Skills / Keywords | LinkedIn skills, or skills spotted in headline/bio (all job families) |
-| First Found (IST), Last Seen (IST) | When the candidate first appeared, and the latest search that found them |
-
-The file is UTF-8 with a BOM so Excel shows all names correctly. Cells starting with `=`, `+`, `-`, `@`, tab or carriage return are prefixed with `'` so spreadsheets don't execute them. Records are de-duplicated by LinkedIn URL.
-
----
-
-## Command line (optional)
+## Command line (offline demo)
 
 ```bash
-# Offline simulation with sample profiles — no cookies, no LinkedIn calls
-python sales_nav_extractor.py --dry-run
-
-# Live search
-python sales_nav_extractor.py --role "Java Developer" --location "India" --pages 2
-
-# Live search from a Sales Navigator URL
-python sales_nav_extractor.py --url "https://www.linkedin.com/sales/search/people?query=..." --pages 4
+python sales_nav_extractor.py --dry-run   # sample profiles, no LinkedIn access
 ```
 
-Options: `--role`, `--location`, `--keywords` (default `Open to work`), `--pages` (25 leads each), `--url`, `--db-path`, `--csv-path`, `--dry-run`, `--no-jitter`, `--max-leads`.
-
----
-
 ## Known limits
-- Seniority and experience filter IDs follow Sales Navigator's codes but have not yet been confirmed against a live account; a pasted URL (CLI) always uses LinkedIn's own codes.
-- "Re-check live status" reads the public profile page and depends on LinkedIn's page markup.
-- Using LinkedIn's internal search with session cookies is against LinkedIn's user agreement and carries some account risk; keep volumes modest and use a dedicated recruiting seat.
-- The database stores personal data; agree retention and access rules with HR/legal (GDPR / DPDP Act).
+
+- Emails are best guesses unless marked Confirmed or From profile; check before a campaign.
+- The database holds personal data: agree retention and access rules with HR/legal (India's DPDP Act, GDPR),
+  use emails only for relevant job outreach, and delete data on request.

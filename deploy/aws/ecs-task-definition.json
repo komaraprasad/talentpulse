@@ -1,0 +1,42 @@
+{
+  "family": "talentpulse",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "512",
+  "memory": "1024",
+  "runtimePlatform": { "cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX" },
+  "executionRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "talentpulse",
+      "image": "<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/talentpulse:<TAG>",
+      "essential": true,
+      "portMappings": [{ "containerPort": 8000, "protocol": "tcp" }],
+      "environment": [
+        { "name": "TALENTPULSE_HOSTED", "value": "1" },
+        { "name": "TALENTPULSE_SMTP_CHECK", "value": "0" },
+        { "name": "TZ", "value": "Asia/Kolkata" },
+        { "name": "PYTHONUTF8", "value": "1" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:<REGION>:<ACCOUNT_ID>:secret:talentpulse/database-url" }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/status', timeout=4).status == 200 else 1)\""],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 30
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/talentpulse",
+          "awslogs-region": "<REGION>",
+          "awslogs-stream-prefix": "talentpulse",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}

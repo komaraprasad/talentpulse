@@ -3,7 +3,9 @@
 const DEFAULT_API = 'http://127.0.0.1:8000';
 const LOCAL_ORIGINS = ['http://127.0.0.1:8000', 'http://localhost:8000'];  // covered by the manifest
 // Dashboards the manifest already reaches: a search launched from one of them reports back to it
-const knownDashboard = (origin) => LOCAL_ORIGINS.includes(origin) || /^https:\/\/[a-z0-9-]+\.onrender\.com$/.test(origin);
+// (the AWS load balancer's own address, used until the company gives the tool a domain)
+const knownDashboard = (origin) => LOCAL_ORIGINS.includes(origin)
+  || /^https?:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.elb\.amazonaws\.com$/.test(origin);
 let searchTabId = null;
 
 const getApi = async () => {
@@ -81,6 +83,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
         body: JSON.stringify({ ...body, job_id: jobId || undefined }) });
       const r = msg.type === 'refine' ? await post('/api/search/refine', { regions: msg.regions, titles: msg.titles || [] })
         : msg.type === 'ingest' ? await post('/api/ingest', { page_url: msg.pageUrl, data: msg.data })
+        : msg.type === 'companies' ? await post('/api/companies', { companies: msg.companies })
         : await fetch(`${api}/api/ingest/state${jobId ? '?job_id=' + encodeURIComponent(jobId) : ''}`);
       if (!r.ok) return reply({ offline: true, server: api, error: `server answered HTTP ${r.status}` });
       reply(await r.json());

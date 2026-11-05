@@ -1,0 +1,89 @@
+# TalentPulse on EKS. Replace every <...> value, then: kubectl apply -f eks-talentpulse.yaml
+# Needs the AWS Load Balancer Controller in the cluster (for the Ingress). An ACM certificate is only
+# needed once a domain is used (see the Ingress annotations).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: talentpulse
+---
+# DATABASE_URL secret. Prefer creating it from the command line so it never sits in a file:
+#   kubectl -n talentpulse create secret generic talentpulse-db --from-literal=DATABASE_URL='postgresql://...'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: talentpulse
+  namespace: talentpulse
+spec:
+  replicas: 1                 # exactly 1: running searches and live updates live in the process memory
+  strategy:
+    type: Recreate            # never two copies at once, even during an update
+  selector:
+    matchLabels: { app: talentpulse }
+  template:
+    metadata:
+      labels: { app: talentpulse }
+    spec:
+      containers:
+        - name: talentpulse
+          image: <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/talentpulse:<TAG>
+          ports:
+            - containerPort: 8000
+          env:
+            - { name: TALENTPULSE_HOSTED, value: "1" }
+            - { name: TALENTPULSE_SMTP_CHECK, value: "0" }
+            - { name: TZ, value: Asia/Kolkata }
+            - { name: PYTHONUTF8, value: "1" }
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: talentpulse-db, key: DATABASE_URL }
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: 1000m, memory: 1Gi }
+          readinessProbe:
+            httpGet: { path: /api/status, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet: { path: /api/status, port: 8000 }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 4
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: talentpulse
+  namespace: talentpulse
+spec:
+  selector: { app: talentpulse }
+  ports:
+    - port: 80
+      targetPort: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: talentpulse
+  namespace: talentpulse
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    # Testing (no domain yet): HTTP on the ALB's own *.elb.amazonaws.com address.
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    # With a domain later: use the three lines below instead, and add "host: <DOMAIN>" to the rule.
+    #   alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443},{"HTTP":80}]'
+    #   alb.ingress.kubernetes.io/ssl-redirect: "443"
+    #   alb.ingress.kubernetes.io/certificate-arn: <ACM_CERTIFICATE_ARN>
+    alb.ingress.kubernetes.io/healthcheck-path: /api/status
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=300
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: talentpulse
+                port: { number: 80 }

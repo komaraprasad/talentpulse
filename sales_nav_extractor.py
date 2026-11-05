@@ -85,6 +85,7 @@ CSV_HEADERS = [
     "Open-to-Work Status",
     "Mobile Number",
     "Email Address",
+    "Email Status",
     "Relevant Skills / Keywords",
     "First Found (IST)",
     "Last Seen (IST)",
@@ -852,6 +853,21 @@ EMAIL_STATUS_NOT_FOUND = "Not found"
 # proves the mailbox exists, not whose it is, so neither can be trusted
 EMAIL_STATUS_SHARED = "Risky (shared name)"
 
+# What people type as their "company" when they have no employer; no work email can exist there
+NON_EMPLOYERS = {
+    "self", "self employed", "freelance", "freelancer", "freelancing", "independent", "independent consultant",
+    "student", "students", "fresher", "open to work", "opentowork", "looking for opportunities",
+    "looking for job", "looking for a job", "job seeker", "seeking opportunities", "actively looking",
+    "unemployed", "career break", "not available", "na", "n a", "none", "nil", "confidential", "stealth",
+    "stealth startup", "stealth mode", "home", "personal", "private", "various",
+}
+
+
+def is_non_employer(company: str) -> bool:
+    """True for 'Self', 'Student', '(Freelancing)', 'Open to Work' and the like (no real employer)."""
+    key = " ".join(re.sub(r"[^a-z ]", " ", (company or "").lower()).split())
+    return not key or key in NON_EMPLOYERS
+
 
 class EmailFinder:
     """
@@ -889,6 +905,30 @@ class EmailFinder:
     def _ascii_slug(text: str) -> str:
         text = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode()
         return re.sub(r"[^a-z0-9]", "", text.lower())
+
+    HONORIFICS = {"er", "dr", "mr", "mrs", "ms", "miss", "prof", "ca", "adv", "sri", "shri", "smt"}
+
+    @classmethod
+    def clean_name(cls, first: str, last: str) -> Tuple[str, str]:
+        """
+        The person's name without headline text or titles, for email addresses:
+        'Murari' + 'Krishna-Java Full Stack Developer at Zensar' -> 'Murari' + 'Krishna';
+        'Er' + 'Surya Bhan' -> 'Surya' + 'Bhan'. Plain names are returned unchanged.
+        """
+        def cut(text: str) -> str:
+            text = re.split(r"\s+[-–|]\s+|[|,(@]|\s+at\s+", text or "", maxsplit=1)[0]
+            # A hyphen followed by more words starts a headline ("Krishna-Java Developer"); "Jean-Luc" stays
+            return re.split(r"[-–](?=[^-–]*\s)", text, maxsplit=1)[0].strip()
+
+        f, l = cut(first), cut(last)
+        words = f.split()
+        if words and words[0].strip(".").lower() in cls.HONORIFICS:
+            if len(words) > 1:
+                f = " ".join(words[1:])
+            else:
+                rest = l.split()
+                f, l = (rest[0], " ".join(rest[1:])) if rest else ("", "")
+        return f, l
 
     @classmethod
     def candidate_addresses(cls, first: str, last: str, domain: str) -> List[Tuple[str, str]]:
@@ -1021,6 +1061,9 @@ class EmailFinder:
         self, first_name: str, last_name: str, company_name: str, website: Optional[str] = None
     ) -> Tuple[Optional[str], str]:
         """Returns (email, status) where status is one of the EMAIL_STATUS_* values."""
+        if is_non_employer(company_name):
+            return None, EMAIL_STATUS_NOT_FOUND
+        first_name, last_name = self.clean_name(first_name, last_name)
         domain = self.find_domain(company_name, website)
         if not domain:
             return None, EMAIL_STATUS_NOT_FOUND
@@ -2145,6 +2188,17 @@ class LeadDatabase:
         }
         return "; ".join(nice.get(r, r[:1].upper() + r[1:]) for r in items) or "Rejected"
 
+    @staticmethod
+    def _csv_email_status(email: str, status: str) -> str:
+        """How far an email can be trusted, in recruiter words (empty when there is no email)."""
+        if not email:
+            return ""
+        return {
+            EMAIL_STATUS_VERIFIED: "Confirmed",
+            EMAIL_STATUS_PROFILE: "From profile",
+            EMAIL_STATUS_RISKY: "Likely (unconfirmed)",
+        }.get(status or EMAIL_STATUS_PROFILE, "Guess")
+
     def _csv_row(self, r: Tuple[Any, ...]) -> List[Any]:
         (name, url, title, headline, company, years, location, is_otw, sig_type, sig_desc,
          status, reasons, phone, email, email_status, skills, first_found, last_seen) = r
@@ -2155,6 +2209,7 @@ class LeadDatabase:
             self._csv_otw(is_otw, sig_type, sig_desc),
             self._csv_phone(phone),
             email,
+            self._csv_email_status(email, email_status),
             (skills or "").replace(";", ",").replace(" ,", ","),
             self._csv_time(first_found), self._csv_time(last_seen),
         ]

@@ -95,6 +95,34 @@
     return list.find((e) => e.text.trim().toLowerCase() === want) || null;
   }
 
+  // Employers' websites, so emails use the real domain (Tata Consultancy Services -> tcs.com). The server
+  // names the new companies after each page; they are looked up once the search is done, so it isn't slowed,
+  // with a pause between companies and at most 30 per run. Each company is looked up once, ever.
+  const companyQueue = [];
+  const queueCompanies = (r) => {
+    for (const c of (r && r.companies) || []) {
+      if (/^\d+$/.test(String(c.id)) && !companyQueue.some((q) => q.id === c.id)) companyQueue.push(c);
+    }
+  };
+  async function lookUpCompanies() {
+    const csrf = (document.cookie.match(/JSESSIONID="?([^";]+)/) || [])[1] || '';
+    const found = [];
+    for (const c of companyQueue.splice(0, 30)) {
+      try {
+        const r = await fetch(`/sales-api/salesApiCompanies/${c.id}?decoration=%28entityUrn%2Cname%2Cwebsite%29`,
+          { credentials: 'include', headers: { 'csrf-token': csrf, 'x-restli-protocol-version': '2.0.0', accept: 'application/json' } });
+        if (r.status === 429 || r.status === 999) break;  // LinkedIn asked to slow down: stop for this run
+        if (r.ok) {
+          const d = await r.json();
+          found.push({ id: c.id, name: String(d.name || ''), website: String(d.website || '').trim() });
+        }
+      } catch (e) {}
+      msg(`Finding company websites for emails… ${found.length}`);
+      await sleep(700 + Math.random() * 600);
+    }
+    if (found.length) await ask({ type: 'companies', companies: found });
+  }
+
   // Fast path: take the results request this page itself just made, and ask for the next 25 the same way
   // (only "start" changes), as Next would. About 1.5 s per 25 people, no drawing or scrolling.
   let fastTried = false;
@@ -119,16 +147,21 @@
       if (!n && !wrapped && start > 0) { start = 0; wrapped = true; continue; }  // past the end: back to the top
       total = (data.paging && data.paging.total) || (n ? Infinity : 0);
       if (!n) { if (!sent) data.paging = { start: 0, count: 0, total: 0 }; }
-      await ask({ type: 'ingest', pageUrl: location.href, data });
+      queueCompanies(await ask({ type: 'ingest', pageUrl: location.href, data }));
       sent += n;
       const s = await ask({ type: 'state' });
-      if (!s || !s.waiting) { finished(`Done: ${s ? s.processed : ''} people. Results are on the dashboard.`); return true; }
+      if (!s || !s.waiting) {
+        await lookUpCompanies();
+        finished(`Done: ${s ? s.processed : ''} people. Results are on the dashboard.`);
+        return true;
+      }
       msg(`${s.processed} / ${s.limit} people collected…`);
       if (!n) break;
       start += n;
       if (start >= total && !wrapped) { start = 0; wrapped = true; }  // reached the end: check the top for new people
       await sleep(1200 + Math.random() * 800);  // short pause between requests
     }
+    await lookUpCompanies();
     finished('Search finished. Results are on the dashboard.');
     return true;
   }

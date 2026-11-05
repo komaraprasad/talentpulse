@@ -1,4 +1,4 @@
-"""Postgres storage (DATABASE_URL), as used on Render with Neon.
+"""Postgres storage (DATABASE_URL), as used on AWS with RDS.
 
 Runs only when TALENTPULSE_TEST_DATABASE_URL points at a throwaway Postgres database; the `leads` table
 there is dropped first. Skipped otherwise, so the normal test run needs no Postgres.
