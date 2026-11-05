@@ -26,6 +26,7 @@ Environment variables (already set in the image, can be overridden):
 | `TALENTPULSE_HOSTED` | `1` | turns off test-only features (dry runs, raw logs, `/docs`) |
 | `TALENTPULSE_SMTP_CHECK` | `0` | set `1` only if outbound port 25 is allowed |
 | `TZ` | `Asia/Kolkata` | timestamps in India time |
+| `TALENTPULSE_DB_POOL_SIZE` | `15` (default) | most database connections at once; set `8` for a database with a 15-connection limit (e.g. Aiven free) |
 
 **Why exactly 1 replica:** running searches and the dashboard's live updates are kept in the
 app's memory. With 2+ copies, a browser's requests land on different copies and searches fail.

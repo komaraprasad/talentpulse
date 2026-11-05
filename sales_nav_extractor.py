@@ -1571,6 +1571,12 @@ class LeadQualifier:
 # With DATABASE_URL set (a Postgres address, e.g. a free Neon database), candidates are stored there
 # instead of the local SQLite file, so they survive restarts and redeploys on hosts whose disk is wiped.
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+# Most connections TalentPulse opens at once. Keep it below the database's own limit, leaving a few for the
+# provider (e.g. 8 on Aiven's free plan, which allows 15).
+try:
+    DB_POOL_SIZE = max(2, min(int(os.environ.get("TALENTPULSE_DB_POOL_SIZE", "15")), 50))
+except ValueError:
+    DB_POOL_SIZE = 15
 _pg_pool = None
 _pg_pool_guard = threading.Lock()
 
@@ -1650,7 +1656,7 @@ def _pg_connection() -> _PgConnection:
             # Client-side parameter binding: works through Neon's connection pooler and keeps SQLite's
             # loose typing (e.g. "? IS NULL"); check() replaces connections dropped while the database slept
             _pg_pool = ConnectionPool(
-                DATABASE_URL, min_size=1, max_size=15, open=True, timeout=30,
+                DATABASE_URL, min_size=1, max_size=DB_POOL_SIZE, open=True, timeout=30,
                 check=ConnectionPool.check_connection,
                 kwargs={"autocommit": True, "cursor_factory": psycopg.ClientCursor, "connect_timeout": 15},
             )
