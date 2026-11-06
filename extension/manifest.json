@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "TalentPulse Capture",
   "version": "2.13.0",
-  "description": "Sends the Sales Navigator results you are viewing to your TalentPulse dashboard (local or hosted). Makes no extra LinkedIn requests.",
+  "description": "Sends the Sales Navigator results you are viewing to your TalentPulse dashboard (local or hosted). Works only through your own Sales Navigator login; reads search results, never profile pages.",
   "permissions": [
     "storage",
     "scripting",

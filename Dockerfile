@@ -26,5 +26,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/status', timeout=4).status == 200 else 1)"
 
-# One worker on purpose: running searches and live updates are kept in this process's memory
-CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*' --timeout-keep-alive 75"]
+# One worker on purpose: running searches and live updates are kept in this process's memory.
+# Keep-alive is longer than the load balancer's 300 s idle timeout, so it never reuses a closed connection (502s).
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*' --timeout-keep-alive 310"]

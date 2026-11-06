@@ -15,6 +15,7 @@
       "environment": [
         { "name": "TALENTPULSE_HOSTED", "value": "1" },
         { "name": "TALENTPULSE_SMTP_CHECK", "value": "0" },
+        { "name": "TALENTPULSE_DB_POOL_SIZE", "value": "8" },
         { "name": "TZ", "value": "Asia/Kolkata" },
         { "name": "PYTHONUTF8", "value": "1" }
       ],

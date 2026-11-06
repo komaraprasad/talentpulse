@@ -13,7 +13,7 @@ never connects to LinkedIn and stores no LinkedIn logins.
 | Health check | `GET /api/status` → 200 |
 | Size | 0.5 vCPU, 1 GB RAM |
 | Replicas | **exactly 1** (see below) |
-| Database | PostgreSQL 14+ (RDS `db.t4g.micro` is enough). The app creates its tables on first start. |
+| Database | Any PostgreSQL 14+: Aiven (chosen for testing) or RDS (`db.t4g.micro` is enough). The app creates its tables on first start. |
 | Secret | `DATABASE_URL`, e.g. `postgresql://user:pass@host:5432/talentpulse?sslmode=require` |
 | Load balancer | ALB, **idle timeout ≥ 300 s**. Testing: HTTP (80) on the ALB's own address. Later: HTTPS with an ACM certificate and a domain. |
 | Network | inbound 80 (testing) or 443 (with a domain) only; outbound to the database and the internet (HTTPS to `cloudflare-dns.com` for email domain checks) |
@@ -26,7 +26,11 @@ Environment variables (already set in the image, can be overridden):
 | `TALENTPULSE_HOSTED` | `1` | turns off test-only features (dry runs, raw logs, `/docs`) |
 | `TALENTPULSE_SMTP_CHECK` | `0` | set `1` only if outbound port 25 is allowed |
 | `TZ` | `Asia/Kolkata` | timestamps in India time |
-| `TALENTPULSE_DB_POOL_SIZE` | `15` (default) | most database connections at once; set `8` for a database with a 15-connection limit (e.g. Aiven free) |
+| `TALENTPULSE_DB_POOL_SIZE` | `8` in the ECS and EKS files (app default 15) | most database connections at once; `8` suits a database with a 15-connection limit (e.g. Aiven free) |
+
+**Restrict access: TalentPulse has no login.** Anyone who can reach the address can read, export and change
+candidate data. Allow only the office / VPN addresses on the load balancer (or make it internal), never `0.0.0.0/0`.
+Plain HTTP on the load balancer address is for short tests only: use HTTPS with a domain before real use.
 
 **Why exactly 1 replica:** running searches and the dashboard's live updates are kept in the
 app's memory. With 2+ copies, a browser's requests land on different copies and searches fail.
@@ -48,13 +52,18 @@ docker push <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/talentpulse:<TAG>
 
 ## 2. Database and secret
 
-1. Create an RDS PostgreSQL instance in the same VPC as the cluster. Allow port 5432 only from the
-   service's security group.
-2. Create a database (e.g. `talentpulse`) and store the connection string:
+**Aiven (chosen for testing):** copy the **Service URI** from the Aiven console (keep `?sslmode=require`). The cluster
+must be allowed to connect out to the Aiven host and port shown there (not 5432). Candidate data then sits outside
+the company's AWS account, so confirm that is allowed.
+
+**RDS (alternative):** create a PostgreSQL instance in the same VPC as the cluster, allow port 5432 only from the
+service's security group, and create a database (e.g. `talentpulse`).
+
+Store the connection string as a secret (never in a file or in Git):
 
 ```bash
 aws secretsmanager create-secret --name talentpulse/database-url --region <REGION> \
-  --secret-string 'postgresql://<USER>:<PASSWORD>@<RDS_ENDPOINT>:5432/talentpulse?sslmode=require'
+  --secret-string '<CONNECTION_STRING>'
 ```
 
 ## 3a. ECS Fargate
