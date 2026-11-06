@@ -3,9 +3,10 @@
 const DEFAULT_API = 'http://127.0.0.1:8000';
 const LOCAL_ORIGINS = ['http://127.0.0.1:8000', 'http://localhost:8000'];  // covered by the manifest
 // Dashboards the manifest already reaches: a search launched from one of them reports back to it
-// (the AWS load balancer's own address, used until the company gives the tool a domain)
+// (the AWS load balancer's or EC2 instance's own address, used until the company gives the tool a domain)
 const knownDashboard = (origin) => LOCAL_ORIGINS.includes(origin)
-  || /^https?:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.elb\.amazonaws\.com$/.test(origin);
+  || /^https?:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.elb\.amazonaws\.com$/.test(origin)
+  || /^http:\/\/ec2-[0-9-]+\.[a-z0-9-]+\.compute\.amazonaws\.com:8000$/.test(origin);  // an EC2 instance's own address
 let searchTabId = null;
 
 const getApi = async () => {

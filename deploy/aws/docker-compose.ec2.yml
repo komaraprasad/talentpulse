@@ -1,0 +1,24 @@
+# TalentPulse on a single EC2 instance (Docker + Postgres container). See README.md, section "Single EC2 instance".
+# Needs a .env file next to this one holding DB_PASSWORD (never commit it):
+#   echo "DB_PASSWORD=$(openssl rand -hex 16)" > .env && chmod 600 .env
+# Build the image first (older Docker Compose here lacks buildx):
+#   sudo DOCKER_BUILDKIT=0 docker build -t talentpulse-app:local .
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: talentpulse
+      POSTGRES_USER: talentpulse
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  app:
+    image: talentpulse-app:local
+    restart: unless-stopped
+    ports:
+      - "8000:8000"          # use "127.0.0.1:8000:8000" to keep it private (SSM tunnel only)
+    environment:
+      DATABASE_URL: postgresql://talentpulse:${DB_PASSWORD}@db:5432/talentpulse
+volumes:
+  pgdata:

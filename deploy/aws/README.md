@@ -116,6 +116,20 @@ Below, `<ADDRESS>` is the ALB address (testing) or the domain.
 4. Install the extension (banner on the dashboard), run a 25-lead search, then restart the service
    and confirm the candidates are still there.
 
+## Single EC2 instance (Docker + Postgres container)
+
+Used when the company gives one EC2 instance instead of a cluster. `docker-compose.ec2.yml` runs the app and a
+Postgres container; the data sits in a Docker volume on the instance's disk (ask for EBS snapshots).
+
+1. `git clone` the repo on the instance, then create `.env` with `DB_PASSWORD` (see the top of the compose file).
+2. Build with plain Docker (Compose's own build needs buildx): `sudo DOCKER_BUILDKIT=0 docker build -t talentpulse-app:local .`
+   On an ARM (t4g) instance never use `--platform linux/amd64`.
+3. `cp deploy/aws/docker-compose.ec2.yml docker-compose.yml`, then `sudo docker-compose up -d db`, wait 15 s,
+   `sudo docker-compose up -d app`.
+4. The security group must allow inbound **8000 from the office / VPN range only** (there is no login).
+5. The team opens `http://ec2-<IP-with-dashes>.<region>.compute.amazonaws.com:8000` (the instance's Public IPv4 DNS).
+   Extension 2.14.0+ recognises this address. Use an **Elastic IP** so the address does not change when the instance restarts.
+
 ## Updating
 
 Build and push a new tag, then update the task definition / Deployment image. With 1 replica the
