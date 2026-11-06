@@ -2191,6 +2191,8 @@ class LeadDatabase:
             return "Yes - LinkedIn #OpenToWork badge"
         if signal_type == "Job-Seeking Signal":
             return "Yes - job-seeking language in profile"
+        if signal_type == "Open to Work Search":
+            return "Yes - found by Sales Navigator open-to-work search"
         if signal_type == "Open to Work":
             return "Yes - #OpenToWork stated in profile"
         return "Yes"

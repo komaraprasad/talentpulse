@@ -1292,6 +1292,9 @@ def _salesnav_search_url(role: Any, regions: List[Dict[str, str]], seniority: Li
     return "https://www.linkedin.com/sales/search/people?query=" + quote(query, safe="(),:")
 
 
+OPEN_TO_WORK_SEARCH = '("open to work" OR opentowork)'
+
+
 def _keyword_query(base: str, extra: List[str], mode: str) -> str:
     """Sales Navigator keyword text: the base words plus the form's keywords, in its Boolean syntax."""
     words = [" ".join(k.replace('"', " ").replace("(", " ").replace(")", " ").split()) for k in extra]
@@ -1343,7 +1346,10 @@ def prepare_search(req: StartJobRequest):
     multi = locations.resolve_many(places, LINKEDIN_GEO_DIRECTORY) if places else {"regions": [], "local_terms": [], "names": []}
     regions = multi["regions"] or [{"id": p.get("id", ""), "text": p["text"]} for p in places if str(p.get("id") or "").isdigit()]
     base_keywords = (req.keywords or "Open to work").strip()
-    keywords = _keyword_query(base_keywords, req.extra_keywords or [], req.keyword_mode or "any")
+    # Unquoted, Sales Navigator finds "open" and "work" anywhere in a profile ("Open to AI roles... make them
+    # work"); the quoted phrase or the hashtag finds only people who actually wrote it
+    search_base = OPEN_TO_WORK_SEARCH if base_keywords.lower() == "open to work" else base_keywords
+    keywords = _keyword_query(search_base, req.extra_keywords or [], req.keyword_mode or "any")
     # Sales Navigator is searched by country, so Gate G narrows to the chosen cities (and their other names)
     terms = list(multi["local_terms"])
     for r in regions:
@@ -1388,6 +1394,7 @@ def prepare_search(req: StartJobRequest):
                                "filters": filters, "job_id": job_id, "desc": desc, "limit": limit, "seen": _known_profiles(),
                                "started": time.time(), "role": role, "seniority": req.seniority_levels or [],
                                "keywords": keywords, "experience": req.experience or [],
+                               "otw_search": search_base == OPEN_TO_WORK_SEARCH,
                                "refine": [] if exact else cities,
                                "roles": role_codes, "refine_titles": [c["text"] for c in role_codes if not c["id"]],
                                "known_regions": known if exact else []})
@@ -1420,8 +1427,9 @@ def _normalize_salesnav_element(el: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cur = positions[0] if positions else {}
     urn = str(el.get("entityUrn") or el.get("objectUrn") or "")
     inner = urn.split(":", 3)[-1].strip("()") if urn else ""
-    blob = json.dumps({k: el.get(k) for k in ("spotlightBadges", "badges", "openToWork", "openToWorkBadge",
-                                               "profilePictureDisplayImage", "memorialized")}).upper()
+    # Only the badge values: the field names themselves ("openToWork"...) would match every person
+    blob = json.dumps([el.get(k) for k in ("spotlightBadges", "badges", "openToWorkBadge",
+                                            "profilePictureDisplayImage")]).upper()
     raw = dict(el)
     raw.update({
         "title": cur.get("title") or el.get("title") or "",
@@ -1590,6 +1598,13 @@ def _ingest_batch(elements: List[Dict[str, Any]], page_url: str, last_page: bool
         if not raw:
             continue
         record = extractor.process_raw_lead(raw, filters, job_id=job_id)
+        if ctx.get("otw_search") and not record.is_open_to_work:
+            # Sales Navigator returned this person for "open to work" / #OpenToWork, so it is in their profile,
+            # usually the headline, which search results don't include (the About text was checked above)
+            record.is_open_to_work, record.otw_status = True, "Yes"
+            record.signal_type = "Open to Work Search"
+            record.signal_description = ("Found by Sales Navigator's \"open to work\" search: stated in their "
+                                         "headline or profile.")
         if not record.linkedin_url or _profile_key(record.linkedin_url) in pending_search.get("seen", set()):
             with job_lock:
                 current_job["skipped_known"] = current_job.get("skipped_known", 0) + 1

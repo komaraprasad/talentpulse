@@ -217,3 +217,42 @@ def test_simultaneous_saves_are_never_lost():
         assert conn.execute("SELECT COUNT(*) FROM leads").fetchone()[0] == 200
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert errors == []
+
+
+def test_open_to_work_needs_real_evidence_and_search_uses_the_phrase():
+    sys.path.insert(0, ROOT)
+    import app
+    plain = {"fullName": "Plain Person", "firstName": "Plain", "lastName": "Person",
+             "currentPositions": [{"title": "AI Engineer", "companyName": "Acme"}],
+             "spotlightBadges": [{"id": "POSTED_ON_LINKEDIN", "displayValue": "2 recent posts"}],
+             "summary": "Open to AI product roles. I make systems work."}
+    # No open-to-work data from LinkedIn: not flagged (the field names alone used to flag everyone)
+    assert app._normalize_salesnav_element(plain)["openToWork"] is False
+    assert app._normalize_salesnav_element(dict(plain, openToWork=True))["openToWork"] is True
+    assert app._normalize_salesnav_element(dict(plain, spotlightBadges=[{"id": "OPEN_TO_WORK"}]))["openToWork"] is True
+    # The search asks Sales Navigator for the phrase, not the separate words
+    assert app._keyword_query(app.OPEN_TO_WORK_SEARCH, [], "any") == '("open to work" OR opentowork)'
+    assert app._keyword_query(app.OPEN_TO_WORK_SEARCH, ["Java"], "any") == '("open to work" OR opentowork) AND (Java)'
+
+
+def test_people_from_the_open_to_work_search_are_never_marked_no(local):
+    base, _ = local
+    job = requests.post(base + "/api/search/prepare", json={
+        "role_titles": [{"text": "Java Developer"}], "locations": [{"text": "Bengaluru, Karnataka, India"}],
+        "target_leads": 25}).json()["job_id"]
+    quiet = {"fullName": "Quiet Seeker", "firstName": "Quiet", "lastName": "Seeker",
+             "entityUrn": "urn:li:fs_salesProfile:(ACwQUIET1,NAME_SEARCH,x)",
+             "currentPositions": [{"title": "Java Developer", "companyName": "Acme"}],
+             "geoRegion": "Bengaluru, Karnataka, India", "summary": "I build Java services."}
+    loud = dict(quiet, fullName="Loud Seeker", lastName="Seeker", entityUrn="urn:li:fs_salesProfile:(ACwLOUD1,NAME_SEARCH,x)",
+                summary="Actively looking for Java roles. #OpenToWork")
+    requests.post(base + "/api/ingest", json={"job_id": job, "page_url": "t",
+                                               "data": {"elements": [quiet, loud], "paging": {"start": 0, "count": 2, "total": 2}}})
+    leads = {}
+    def got():
+        leads.update({l["full_name"]: l for l in requests.get(base + "/api/leads?limit=500").json()["leads"]})
+        return "Quiet Seeker" in leads and "Loud Seeker" in leads
+    assert _wait(got)
+    # Seen in the About text: labelled from it; not visible there: still open to work, found by the search
+    assert leads["Loud Seeker"]["otw_status"] == "Yes" and leads["Loud Seeker"]["signal_type"] == "Open to Work"
+    assert leads["Quiet Seeker"]["otw_status"] == "Yes" and leads["Quiet Seeker"]["signal_type"] == "Open to Work Search"
