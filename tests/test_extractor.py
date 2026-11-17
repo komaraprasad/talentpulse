@@ -330,17 +330,6 @@ def test_gate_f_years_of_experience():
     assert unknown.is_qualified is True
 
 
-def _offline_finder(mx_domains, mailbox, catch_all=False):
-    """EmailFinder with DNS/SMTP replaced by in-memory fakes."""
-    from sales_nav_extractor import EmailFinder
-    f = EmailFinder()
-    f.mx_host = lambda d: f"mx.{d}" if d in mx_domains else None
-    def fake_smtp(mx, emails):
-        return {e: (True if catch_all else (e in mailbox)) for e in emails}
-    f._smtp_check = fake_smtp
-    return f
-
-
 def test_phone_extraction_from_headline():
     cases = [
         ("Java Dev | Mobile: +91 98765 43210", "+91 98765 43210"),
@@ -357,40 +346,6 @@ def test_phone_extraction_from_headline():
     ]
     for headline, expected in cases:
         assert DataCleaner.extract_contact_info({"headline": headline})[0] == expected, headline
-
-
-def test_email_finder_patterns():
-    from sales_nav_extractor import EmailFinder
-    emails = [e for _, e in EmailFinder.candidate_addresses("Rahul", "Sharma", "infosys.com")]
-    assert emails[:3] == ["rahul.sharma@infosys.com", "rahulsharma@infosys.com", "rsharma@infosys.com"]
-    # Accents are folded to ASCII
-    assert EmailFinder.candidate_addresses("José", "Núñez", "x.com")[0][1] == "jose.nunez@x.com"
-
-
-def test_email_finder_verified_and_pattern_reuse():
-    from sales_nav_extractor import EMAIL_STATUS_VERIFIED
-    f = _offline_finder({"infosys.com"}, {"rsharma@infosys.com", "pmehta@infosys.com"})
-    assert f.find("Rahul", "Sharma", "Infosys") == ("rsharma@infosys.com", EMAIL_STATUS_VERIFIED)
-    assert f._pattern_cache["infosys.com"] == "flast"
-    assert f.find("Priya", "Mehta", "Infosys") == ("pmehta@infosys.com", EMAIL_STATUS_VERIFIED)
-
-
-def test_email_finder_catch_all_and_missing_domain():
-    from sales_nav_extractor import EMAIL_STATUS_RISKY, EMAIL_STATUS_NOT_FOUND
-    f = _offline_finder({"acmetech.com"}, set(), catch_all=True)
-    assert f.find("Jane", "Doe", "Acme Tech Solutions Pvt Ltd") == ("jane.doe@acmetech.com", EMAIL_STATUS_RISKY)
-    f = _offline_finder(set(), set())
-    assert f.find("Jane", "Doe", "Nowhere Corp") == (None, EMAIL_STATUS_NOT_FOUND)
-    # Server rejects every guess -> nothing is invented
-    f = _offline_finder({"wipro.com"}, set())
-    assert f.find("Ravi", "Kumar", "Wipro") == (None, EMAIL_STATUS_NOT_FOUND)
-
-
-def test_dry_run_never_calls_email_finder():
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        db = LeadDatabase(os.path.join(tmp_dir, "dry.db"))
-        extractor = SalesNavExtractor(session=None, db=db, enable_jitter=False, dry_run=True)
-        assert extractor.email_finder is None
 
 
 def test_run_stops_after_current_page():
@@ -1187,27 +1142,12 @@ def test_extension_mode_normalizes_salesnav_results_and_builds_link():
     assert not A.SERVER_LINKEDIN_CALLS  # the server never calls LinkedIn by default
 
 
-def test_email_names_drop_headline_text_and_titles():
-    from sales_nav_extractor import EmailFinder
-    clean = EmailFinder.clean_name
-    assert clean("Murari", "Krishna-Java Full Stack Developer at Zensar") == ("Murari", "Krishna")
-    assert clean("Er", "Surya Bhan") == ("Surya", "Bhan")
-    assert clean("Dr. Asha", "Rao") == ("Asha", "Rao")
-    assert clean("Ravi", "Kumar | Java Developer") == ("Ravi", "Kumar")
-    assert clean("Priya", "Sharma (She/Her)") == ("Priya", "Sharma")
-    # Ordinary names are unchanged
-    assert clean("Tejesh", "Reddy KN") == ("Tejesh", "Reddy KN")
-    assert clean("Jean-Luc", "Picard") == ("Jean-Luc", "Picard")
-    assert clean("Anju", "Kumari") == ("Anju", "Kumari")
-
-
-def test_no_work_email_without_a_real_employer():
-    from sales_nav_extractor import EmailFinder, is_non_employer, EMAIL_STATUS_NOT_FOUND
+def test_non_employer_names():
+    from sales_nav_extractor import is_non_employer
     for name in ("Self", "Self-Employed", "Student", "(freelancing)", "Freelance", "Open to Work", "", "N/A"):
         assert is_non_employer(name), name
     for name in ("IBM", "Infosys", "Self Drive Rentals", "☁️ Intellinet ☁️", "Student Loan Finance Ltd"):
         assert not is_non_employer(name), name
-    assert EmailFinder().find("Akshaya", "Dhaipulle", "Self") == (None, EMAIL_STATUS_NOT_FOUND)
 
 
 def test_email_status_column_in_recruiter_words():
@@ -1241,3 +1181,12 @@ def test_explorer_location_filter_matches_other_names_and_several_places():
         rows = [r[0] for r in conn.execute(f"SELECT location FROM leads WHERE {sql}", params)]
         conn.close()
     assert sorted(rows) == ["Bangalore Urban, Karnataka, India", "Greater Bengaluru Area", "Secunderabad, Telangana"]
+
+
+def test_work_emails_are_never_guessed():
+    import sales_nav_extractor as sne
+    assert not hasattr(sne, "EmailFinder")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = LeadDatabase(os.path.join(tmp_dir, "noguess.db"))
+        extractor = SalesNavExtractor(session=None, db=db, enable_jitter=False, dry_run=False)
+        assert not hasattr(extractor, "email_finder")
